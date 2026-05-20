@@ -238,7 +238,7 @@ with page_baseline:
                 f"`beta_CSI300={hedge_stats['beta_equity']:.4f}`，"
                 f"`beta_AU9999={hedge_stats['beta_spot_gold']:.4f}`"
             )
-            st.dataframe(data["panel"].tail(10), width="stretch")
+            render_plain_table(data["panel"].tail(10).reset_index().assign(date=lambda df: df["date"].dt.strftime("%Y-%m-%d")))
 
 with page_custom:
     st.subheader("自定义 ERC")
