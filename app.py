@@ -80,6 +80,49 @@ def render_metric_block(title: str, source: pd.DataFrame, columns: list[str]) ->
     st.markdown("".join(html), unsafe_allow_html=True)
 
 
+def render_plain_table(source: pd.DataFrame) -> None:
+    html = [
+        """
+        <style>
+        .plain-table {
+            width: 100%;
+            border-collapse: collapse;
+            border: 1px solid #e5e7eb;
+            font-size: 14px;
+            margin: 8px 0 16px;
+        }
+        .plain-table th {
+            background: #f6f7f9;
+            color: #4b5563;
+            font-weight: 600;
+            text-align: left;
+            padding: 8px 10px;
+            border: 1px solid #e5e7eb;
+            white-space: nowrap;
+        }
+        .plain-table td {
+            padding: 8px 10px;
+            border: 1px solid #edf0f2;
+            white-space: nowrap;
+        }
+        .plain-table td.number-cell {
+            text-align: right;
+        }
+        </style>
+        <table class="plain-table">
+        """
+    ]
+    html.append("<tr>" + "".join(f"<th>{escape(str(col))}</th>" for col in source.columns) + "</tr>")
+    for _, row in source.iterrows():
+        cells = []
+        for value in row:
+            cell_class = "number-cell" if isinstance(value, (int, float)) and not pd.isna(value) else ""
+            cells.append(f'<td class="{cell_class}">{escape(str(value))}</td>')
+        html.append("<tr>" + "".join(cells) + "</tr>")
+    html.append("</table>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
 @st.cache_data(show_spinner=False)
 def cached_compute_baseline(path: str, start_date: str, lookback: int, rebalance: str):
     return compute_baseline(path, start_date, lookback, rebalance)
@@ -233,13 +276,11 @@ with page_custom:
         st.stop()
 
     st.caption(f"当前数据：{data_label}")
-    st.dataframe(
+    render_plain_table(
         catalog.assign(
             起始日期=lambda df: df["起始日期"].dt.strftime("%Y-%m-%d"),
             结束日期=lambda df: df["结束日期"].dt.strftime("%Y-%m-%d"),
-        ),
-        width="stretch",
-        hide_index=True,
+        )
     )
 
     label_by_code = {row["代码"]: f"{row['名称']} | {row['代码']}" for _, row in catalog.iterrows()}
@@ -308,7 +349,8 @@ with page_custom:
             render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
 
             st.subheader("最新一期持仓")
-            st.dataframe(
-                latest_custom_weights.to_frame("最新权重").assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}")),
-                width="stretch",
+            render_plain_table(
+                latest_custom_weights.rename_axis("资产")
+                .reset_index(name="最新权重")
+                .assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}"))
             )
