@@ -331,15 +331,33 @@ with st.sidebar:
         st.caption(f"{period_label}第 {rebalance_day} 个交易日计算新权重，次一交易日生效；若当期交易日不足，则使用当期最后一个交易日。")
 
     with st.expander("尾部风险参数", expanded=False):
-        pc1_window = st.number_input("PC1窗口（日）", min_value=20, max_value=252, value=63, step=1)
-        pc1_ma_window = st.number_input("PC1平滑窗口（日）", min_value=5, max_value=126, value=30, step=1)
-        pc1_mean_window = st.number_input("PC1历史均值窗口（日）", min_value=60, max_value=756, value=252, step=21)
-        dsv_window = st.number_input("下行半方差窗口（日）", min_value=20, max_value=252, value=63, step=1)
-        final_ma_window = st.number_input("Final均线窗口（日）", min_value=60, max_value=756, value=252, step=21)
-        mid_threshold = st.number_input("中风险阈值", min_value=0.10, max_value=5.00, value=1.20, step=0.05, format="%.2f")
-        high_threshold = st.number_input("高风险阈值", min_value=float(mid_threshold), max_value=8.00, value=max(1.50, float(mid_threshold)), step=0.05, format="%.2f")
-        mid_cash_pct = st.slider("中风险现金仓位", min_value=0, max_value=100, value=25, step=5)
-        high_cash_pct = st.slider("高风险现金仓位", min_value=0, max_value=100, value=50, step=5)
+        risk_defaults = {
+            "risk_pc1_window": 63,
+            "risk_pc1_ma_window": 30,
+            "risk_pc1_mean_window": 252,
+            "risk_dsv_window": 63,
+            "risk_final_ma_window": 252,
+            "risk_mid_threshold": 1.20,
+            "risk_high_threshold": 1.50,
+            "risk_mid_cash_pct": 25,
+            "risk_high_cash_pct": 50,
+        }
+        for key, val in risk_defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = val
+        if st.button("默认", key="reset_risk_defaults", help="恢复所有尾部风险参数为默认值"):
+            for key, val in risk_defaults.items():
+                st.session_state[key] = val
+        pc1_window = st.number_input("PC1窗口（日）", min_value=20, max_value=252, value=st.session_state.risk_pc1_window, step=1, key="risk_pc1_window")
+        pc1_ma_window = st.number_input("PC1平滑窗口（日）", min_value=5, max_value=126, value=st.session_state.risk_pc1_ma_window, step=1, key="risk_pc1_ma_window")
+        pc1_mean_window = st.number_input("PC1历史均值窗口（日）", min_value=60, max_value=756, value=st.session_state.risk_pc1_mean_window, step=21, key="risk_pc1_mean_window")
+        dsv_window = st.number_input("下行半方差窗口（日）", min_value=20, max_value=252, value=st.session_state.risk_dsv_window, step=1, key="risk_dsv_window")
+        final_ma_window = st.number_input("Final均线窗口（日）", min_value=60, max_value=756, value=st.session_state.risk_final_ma_window, step=21, key="risk_final_ma_window")
+        mid_threshold = st.number_input("中风险阈值", min_value=0.10, max_value=5.00, value=st.session_state.risk_mid_threshold, step=0.05, format="%.2f", key="risk_mid_threshold")
+        mid_current = float(mid_threshold)
+        high_threshold = st.number_input("高风险阈值", min_value=mid_current, max_value=8.00, value=max(1.50, mid_current, float(st.session_state.risk_high_threshold)), step=0.05, format="%.2f", key="risk_high_threshold")
+        mid_cash_pct = st.slider("中风险现金仓位", min_value=0, max_value=100, value=st.session_state.risk_mid_cash_pct, step=5, key="risk_mid_cash_pct")
+        high_cash_pct = st.slider("高风险现金仓位", min_value=0, max_value=100, value=st.session_state.risk_high_cash_pct, step=5, key="risk_high_cash_pct")
 
 baseline_upload = None
 
