@@ -103,6 +103,19 @@ def compute_erc_weights(
     return weights.shift(1).fillna(weights.iloc[0])
 
 
+def compute_rebalance_schedule(index: pd.DatetimeIndex, rebalance: str = "M", rebalance_day: int = 1) -> pd.DatetimeIndex:
+    if rebalance == "D":
+        return index
+    if rebalance not in {"W", "M"}:
+        raise ValueError("rebalance must be 'D', 'W', or 'M'.")
+
+    freq = "W-FRI" if rebalance == "W" else "ME"
+    grouped_dates = index.to_series().groupby(pd.Grouper(freq=freq))
+    nth = max(int(rebalance_day), 1) - 1
+    schedule = grouped_dates.apply(lambda dates: dates.iloc[min(nth, len(dates) - 1)] if len(dates) else pd.NaT)
+    return pd.DatetimeIndex(schedule.dropna())
+
+
 def run_erc_backtest(
     asset_prices: pd.DataFrame,
     lookback: int = 60,
@@ -111,6 +124,8 @@ def run_erc_backtest(
 ) -> dict[str, pd.DataFrame | pd.Series]:
     returns = asset_prices.pct_change().dropna()
     weights = compute_erc_weights(returns, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
+    rebalance_dates = compute_rebalance_schedule(returns.index, rebalance=rebalance, rebalance_day=rebalance_day)
+    rebalance_dates = rebalance_dates[rebalance_dates >= returns.index[min(lookback - 1, len(returns.index) - 1)]]
     port_ret = (weights * returns).sum(axis=1)
     nav = (1.0 + port_ret).cumprod().rename("ERC")
     drawdown = (nav / nav.cummax() - 1.0).rename("ERC")
@@ -118,6 +133,7 @@ def run_erc_backtest(
     return {
         "returns": port_ret,
         "weights": weights,
+        "rebalance_dates": rebalance_dates,
         "nav": nav,
         "drawdown": drawdown,
         "turnover": turnover,

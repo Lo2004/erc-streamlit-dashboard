@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 def nav_chart(nav_df: pd.DataFrame) -> go.Figure:
@@ -78,4 +79,79 @@ def weights_chart(weights: pd.DataFrame, labels: dict[str, str]) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=20, r=20, t=60, b=20),
     )
+    return fig
+
+
+def baseline_dashboard_chart(
+    nav_df: pd.DataFrame,
+    drawdown_df: pd.DataFrame,
+    weights: pd.DataFrame,
+    labels: dict[str, str],
+) -> go.Figure:
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        subplot_titles=("净值表现", "动态回撤", "动态持仓"),
+        row_heights=[0.38, 0.28, 0.34],
+    )
+
+    nav_colors = {"ERC": "#111111", "60/40基准": "#767676", "沪深300": "#2f6fbb"}
+    dd_colors = {"ERC": "#9f1d20", "60/40基准": "#767676", "沪深300": "#2f6fbb"}
+
+    for col in nav_df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=nav_df.index,
+                y=nav_df[col],
+                name=col,
+                mode="lines",
+                line=dict(width=2.2, color=nav_colors.get(col)),
+                legendgroup=f"nav-{col}",
+            ),
+            row=1,
+            col=1,
+        )
+
+    for col in drawdown_df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=drawdown_df.index,
+                y=drawdown_df[col],
+                name=f"{col}回撤",
+                mode="lines",
+                line=dict(width=1.8, color=dd_colors.get(col)),
+                fill="tozeroy" if col == "ERC" else None,
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+
+    for col in weights.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=weights.index,
+                y=weights[col],
+                name=labels.get(col, col),
+                mode="lines",
+                stackgroup="weights",
+                hovertemplate="%{y:.2%}<extra></extra>",
+            ),
+            row=3,
+            col=1,
+        )
+
+    fig.update_layout(
+        template="plotly_white",
+        height=980,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=20, r=20, t=80, b=20),
+    )
+    fig.update_yaxes(title_text="净值", row=1, col=1)
+    fig.update_yaxes(title_text="回撤", tickformat=".0%", row=2, col=1)
+    fig.update_yaxes(title_text="权重", tickformat=".0%", range=[0, 1], row=3, col=1)
+    fig.update_xaxes(rangeslider_visible=True, row=3, col=1)
     return fig

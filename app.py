@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from src.baseline import ASSET_LABELS, DATA_PATH, compute_baseline, compute_baseline_from_prices, load_baseline_data
-from src.charts import drawdown_chart, nav_chart, weights_chart
+from src.charts import baseline_dashboard_chart, drawdown_chart, nav_chart, weights_chart
 from src.custom import (
     SAMPLE_CUSTOM_PATH,
     available_window,
@@ -214,6 +214,11 @@ with page_baseline:
 
         latest_date = nav_df.index.max()
         latest_weight_values = weights.iloc[-1].rename(index=ASSET_LABELS)
+        latest_weight_changes = data["weight_change"].rename(index=ASSET_LABELS)
+        last_rebalance_date = data["last_rebalance_date"]
+        next_rebalance_date = data["next_rebalance_date"]
+        last_rebalance_text = "NA" if pd.isna(last_rebalance_date) else last_rebalance_date.strftime("%Y-%m-%d")
+        next_rebalance_text = "NA" if pd.isna(next_rebalance_date) else next_rebalance_date.strftime("%Y-%m-%d")
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("最新日期", latest_date.strftime("%Y-%m-%d"))
@@ -221,9 +226,15 @@ with page_baseline:
         col3.metric("60/40净值", f"{nav_df['60/40基准'].iloc[-1]:.2f}")
         col4.metric("沪深300净值", f"{nav_df['沪深300'].iloc[-1]:.2f}")
 
+        reb_col1, reb_col2, reb_col3 = st.columns([1, 1, 2])
+        reb_col1.metric("上次调仓日", last_rebalance_text)
+        reb_col2.metric("下次调仓日", next_rebalance_text)
+        reb_col3.caption("调仓日按当前频率与第几个交易日设置估算；权重在调仓计算日后的下一交易日生效。")
+
         hold_col1, hold_col2, hold_col3 = st.columns(3)
         for col, (name, value) in zip([hold_col1, hold_col2, hold_col3], latest_weight_values.items()):
-            col.metric(f"最新持仓 | {name}", f"{value:.2%}")
+            change = latest_weight_changes.get(name, 0.0)
+            col.metric(f"最新持仓 | {name}", f"{value:.2%}", delta=f"{change:+.2%}")
 
         st.caption(
             "基准口径：红利低波100全收益 + 中债10年以上国债总财富 + 黄金(中信，对冲沪深300 beta)；"
@@ -231,18 +242,14 @@ with page_baseline:
             f"净值起算日为 {nav_df.index.min().strftime('%Y-%m-%d')}。"
         )
 
-        tab_overview, tab_position, tab_data = st.tabs(["表现", "持仓", "数据"])
+        tab_overview, tab_data = st.tabs(["表现", "数据"])
 
         with tab_overview:
-            st.plotly_chart(nav_chart(nav_df), width="stretch")
-            st.plotly_chart(drawdown_chart(data["drawdown_df"]), width="stretch")
+            st.plotly_chart(baseline_dashboard_chart(nav_df, data["drawdown_df"], weights, ASSET_LABELS), width="stretch")
             st.subheader("核心指标")
             render_metric_block("收益与风险", metrics, ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
             render_metric_block("回撤", metrics, ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
             render_metric_block("交易与胜率", metrics, ["月均换手率", "月胜率", "日胜率"])
-
-        with tab_position:
-            st.plotly_chart(weights_chart(weights, ASSET_LABELS), width="stretch")
 
         with tab_data:
             st.subheader("数据状态")

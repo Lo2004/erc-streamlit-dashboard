@@ -5,8 +5,10 @@ from pathlib import Path
 import pandas as pd
 
 from src.data_loader import load_wind_price_table, validate_required_codes
+from src.erc import compute_rebalance_schedule
 from src.erc import hedge_gold_series, run_erc_backtest
 from src.metrics import build_period_table
+from src.trading_calendar import load_trading_calendar, next_calendar_rebalance_date
 
 
 DATA_PATH = Path("data/标准 ERC- 收盘价数据.xlsx")
@@ -22,6 +24,32 @@ ASSET_LABELS = {
     "bond10": "中债国债总财富(10年以上)",
     "gold_hedged": "黄金(中信，对冲沪深300 beta)",
 }
+
+
+def estimate_next_rebalance_date(last_date: pd.Timestamp, rebalance: str, rebalance_day: int) -> pd.Timestamp:
+    trading_days = load_trading_calendar()
+    calendar_date = next_calendar_rebalance_date(last_date, rebalance, rebalance_day, trading_days)
+    if pd.notna(calendar_date):
+        return calendar_date
+
+    if rebalance == "D":
+        return last_date + pd.offsets.BDay(1)
+
+    nth = max(int(rebalance_day), 1) - 1
+    if rebalance == "M":
+        month_start = (last_date + pd.offsets.MonthBegin(1)).normalize()
+        month_end = (month_start + pd.offsets.MonthEnd(0)).normalize()
+        future_index = pd.bdate_range(month_start, month_end)
+    elif rebalance == "W":
+        next_week_start = (last_date + pd.offsets.Week(weekday=0)).normalize()
+        next_week_end = next_week_start + pd.Timedelta(days=4)
+        future_index = pd.bdate_range(next_week_start, next_week_end)
+    else:
+        raise ValueError("rebalance must be 'D', 'W', or 'M'.")
+
+    if len(future_index) == 0:
+        return pd.NaT
+    return future_index[min(nth, len(future_index) - 1)]
 
 
 def load_baseline_data(path: str | Path) -> tuple[pd.DataFrame, dict[str, str]]:
@@ -70,6 +98,7 @@ def compute_baseline_from_prices(
         rebalance=rebalance,
         rebalance_day=rebalance_day,
     )
+    rebalance_dates = result["rebalance_dates"]
 
     csi300_ret = panel["csi300"].pct_change().reindex(result["returns"].index).fillna(0.0)
     bond_ret = panel["bond10"].pct_change().reindex(result["returns"].index).fillna(0.0)
@@ -90,10 +119,34 @@ def compute_baseline_from_prices(
         names=["组合", "区间"],
     )
 
+    weight_change = pd.Series(0.0, index=result["weights"].columns)
+    last_rebalance_date = pd.NaT
+    next_rebalance_date = pd.NaT
+    effective_rebalance_dates = pd.DatetimeIndex([])
+    if len(rebalance_dates) > 0:
+        effective_dates = []
+        for date in rebalance_dates:
+            pos = panel.index.get_loc(date)
+            if pos + 1 < len(panel.index):
+                effective_dates.append(panel.index[pos + 1])
+        effective_rebalance_dates = pd.DatetimeIndex(effective_dates)
+        effective_rebalance_dates = effective_rebalance_dates[effective_rebalance_dates.isin(result["weights"].index)]
+        past_effective_dates = effective_rebalance_dates[effective_rebalance_dates <= nav_df.index.max()]
+        if len(past_effective_dates) > 0:
+            last_rebalance_date = past_effective_dates[-1]
+            if len(past_effective_dates) > 1:
+                prev_rebalance_date = past_effective_dates[-2]
+                weight_change = result["weights"].loc[last_rebalance_date] - result["weights"].loc[prev_rebalance_date]
+            next_rebalance_date = estimate_next_rebalance_date(nav_df.index.max(), rebalance, rebalance_day)
+
     return {
         "names": names,
         "panel": panel,
         "weights": result["weights"].reindex(nav_df.index).dropna(),
+        "weight_change": weight_change,
+        "last_rebalance_date": last_rebalance_date,
+        "next_rebalance_date": next_rebalance_date,
+        "effective_rebalance_dates": effective_rebalance_dates,
         "nav_df": nav_df,
         "drawdown_df": drawdown_df,
         "metrics": metrics,
