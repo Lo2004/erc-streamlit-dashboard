@@ -5,6 +5,20 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
+def _style_bottom_rangeslider(fig: go.Figure) -> None:
+    fig.update_xaxes(
+        rangeslider=dict(
+            visible=True,
+            thickness=0.035,
+            bgcolor="#fbfcfe",
+            bordercolor="#d7dde8",
+            borderwidth=1,
+        ),
+        row=3,
+        col=1,
+    )
+
+
 def nav_chart(nav_df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     colors = {"ERC": "#111111", "60/40基准": "#767676", "沪深300": "#2f6fbb"}
@@ -92,7 +106,7 @@ def baseline_dashboard_chart(
         rows=3,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.06,
+        vertical_spacing=0.10,
         subplot_titles=("净值表现", "动态回撤", "动态持仓"),
         row_heights=[0.38, 0.28, 0.34],
     )
@@ -113,13 +127,14 @@ def baseline_dashboard_chart(
     }
 
     for col in nav_df.columns:
+        line_color = nav_colors.get(col)
         fig.add_trace(
             go.Scatter(
                 x=nav_df.index,
                 y=nav_df[col],
                 name=col,
                 mode="lines",
-                line=dict(width=2.2, color=nav_colors.get(col)),
+                line=dict(width=2.2, color=line_color),
                 legendgroup=f"nav-{col}",
             ),
             row=1,
@@ -157,15 +172,15 @@ def baseline_dashboard_chart(
 
     fig.update_layout(
         template="plotly_white",
-        height=980,
+        height=1000,
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=80, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.10, xanchor="center", x=0.5),
+        margin=dict(l=20, r=20, t=140, b=20),
     )
     fig.update_yaxes(title_text="净值", row=1, col=1)
     fig.update_yaxes(title_text="回撤", tickformat=".0%", row=2, col=1)
     fig.update_yaxes(title_text="权重", tickformat=".0%", range=[0, 1], row=3, col=1)
-    fig.update_xaxes(rangeslider_visible=True, row=3, col=1)
+    _style_bottom_rangeslider(fig)
     return fig
 
 
@@ -175,7 +190,7 @@ def risk_signal_chart(signals: pd.DataFrame, exposure: pd.Series) -> go.Figure:
         rows=3,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.07,
+        vertical_spacing=0.10,
         subplot_titles=("综合风险分数与目标总仓位", "风险因子历史分位", "风险因子原始值"),
         row_heights=[0.34, 0.33, 0.33],
         specs=[[{"secondary_y": True}], [{}], [{"secondary_y": True}]],
@@ -250,17 +265,17 @@ def risk_signal_chart(signals: pd.DataFrame, exposure: pd.Series) -> go.Figure:
 
     fig.update_layout(
         template="plotly_white",
-        height=820,
+        height=860,
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=80, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.11, xanchor="center", x=0.5),
+        margin=dict(l=20, r=20, t=140, b=20),
     )
     fig.update_yaxes(title_text="风险分数", tickformat=".0%", range=[0, 1], row=1, col=1, secondary_y=False)
     fig.update_yaxes(title_text="总仓位", tickformat=".0%", range=[0, 1], row=1, col=1, secondary_y=True)
     fig.update_yaxes(title_text="历史分位", tickformat=".0%", range=[0, 1], row=2, col=1)
     fig.update_yaxes(title_text="PC1/相关性", tickformat=".0%", row=3, col=1, secondary_y=False)
     fig.update_yaxes(title_text="波动率", tickformat=".0%", row=3, col=1, secondary_y=True)
-    fig.update_xaxes(rangeslider_visible=True, row=3, col=1)
+    _style_bottom_rangeslider(fig)
     return fig
 
 
@@ -270,9 +285,9 @@ def final_signal_chart(signals: pd.DataFrame, exposure: pd.Series) -> go.Figure:
         rows=3,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.07,
+        vertical_spacing=0.10,
         subplot_titles=("Final 指标与均线", "Final 强度与目标总仓位", "构成项：PC1强度与下行半方差"),
-        row_heights=[0.33, 0.34, 0.33],
+        row_heights=[0.34, 0.33, 0.33],
         specs=[[{}], [{"secondary_y": True}], [{"secondary_y": True}]],
     )
 
@@ -362,15 +377,15 @@ def final_signal_chart(signals: pd.DataFrame, exposure: pd.Series) -> go.Figure:
 
     fig.update_layout(
         template="plotly_white",
-        height=820,
+        height=860,
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=80, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.11, xanchor="center", x=0.5),
+        margin=dict(l=20, r=20, t=140, b=20),
     )
     fig.update_yaxes(title_text="指标值", row=1, col=1)
     fig.update_yaxes(title_text="强度", row=2, col=1, secondary_y=False)
     fig.update_yaxes(title_text="总仓位", tickformat=".0%", range=[0, 1], row=2, col=1, secondary_y=True)
     fig.update_yaxes(title_text="PC1强度", row=3, col=1, secondary_y=False)
     fig.update_yaxes(title_text="GM63", row=3, col=1, secondary_y=True)
-    fig.update_xaxes(rangeslider_visible=True, row=3, col=1)
+    _style_bottom_rangeslider(fig)
     return fig
