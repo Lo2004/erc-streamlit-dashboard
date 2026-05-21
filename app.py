@@ -124,6 +124,13 @@ def render_plain_table(source: pd.DataFrame) -> None:
     st.markdown("".join(html), unsafe_allow_html=True)
 
 
+def render_sharpe_note() -> None:
+    st.caption(
+        "夏普比率口径：使用中债-总财富(1年以下)指数(CBA00311.CS)的日收益率作为无风险收益率，"
+        "按组合/基准日收益率减无风险收益率后的超额收益计算。"
+    )
+
+
 @st.cache_data(show_spinner=False)
 def cached_compute_baseline(path: str, start_date: str, lookback: int, rebalance: str, rebalance_day: int):
     return compute_baseline(path, start_date, lookback, rebalance, rebalance_day)
@@ -293,6 +300,7 @@ def render_tail_risk_panel(signals: pd.DataFrame, exposure: pd.Series, overlay_r
         width="stretch",
     )
     st.subheader("尾部风险核心指标")
+    render_sharpe_note()
     render_metric_block("收益与风险", overlay_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
     render_metric_block("回撤", overlay_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
     render_metric_block("交易与胜率", overlay_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
@@ -416,6 +424,7 @@ with page_baseline:
         with tab_overview:
             st.plotly_chart(baseline_dashboard_chart(nav_df, data["drawdown_df"], weights, ASSET_LABELS), width="stretch")
             st.subheader("核心指标")
+            render_sharpe_note()
             render_metric_block("收益与风险", metrics, ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
             render_metric_block("回撤", metrics, ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
             render_metric_block("交易与胜率", metrics, ["月均换手率", "月胜率", "日胜率"])
@@ -570,6 +579,7 @@ with page_custom:
                 )
 
                 st.subheader("核心指标")
+                render_sharpe_note()
                 render_metric_block("收益与风险", custom_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
                 render_metric_block("回撤", custom_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
                 render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])

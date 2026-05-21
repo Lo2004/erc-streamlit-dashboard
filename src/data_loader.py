@@ -46,3 +46,15 @@ def validate_required_codes(prices: pd.DataFrame, required_codes: list[str]) -> 
     missing = [code for code in required_codes if code not in prices.columns]
     if missing:
         raise ValueError(f"Missing required Wind code(s): {', '.join(missing)}")
+
+
+def load_risk_free_returns(
+    path: str | Path,
+    code: str = "CBA00311.CS",
+) -> tuple[pd.Series, str]:
+    loaded = load_wind_price_table(path)
+    validate_required_codes(loaded.prices, [code])
+    nav = loaded.prices[code].dropna()
+    rf_ret = nav.pct_change().fillna(0.0).rename("rf_ret")
+    rf_label = f"{loaded.names.get(code, code)}({code})"
+    return rf_ret, rf_label

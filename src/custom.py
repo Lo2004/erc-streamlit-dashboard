@@ -5,11 +5,13 @@ from pathlib import Path
 import pandas as pd
 
 from src.data_loader import WindPriceData, load_wind_price_table
+from src.data_loader import load_risk_free_returns
 from src.erc import run_erc_backtest
 from src.metrics import build_period_table
 
 
 SAMPLE_CUSTOM_PATH = Path("data/测试拓展资产集.xlsx")
+RISK_FREE_PATH = Path("data/无风险利率-1年期国债指数.xlsx")
 
 
 def load_custom_price_data(source) -> WindPriceData:
@@ -76,10 +78,21 @@ def run_custom_backtest(
     nav_df = pd.concat([result["nav"], benchmark_nav], axis=1).dropna()
     drawdown_df = nav_df / nav_df.cummax() - 1.0
     turnover_zero = pd.Series(0.0, index=nav_df.index)
+    rf_ret, rf_label = load_risk_free_returns(RISK_FREE_PATH)
     metrics = pd.concat(
         {
-            "自定义ERC": build_period_table(result["nav"].reindex(nav_df.index), result["turnover"].reindex(nav_df.index)),
-            benchmark_name: build_period_table(benchmark_nav.reindex(nav_df.index), turnover_zero),
+            "自定义ERC": build_period_table(
+                result["nav"].reindex(nav_df.index),
+                result["turnover"].reindex(nav_df.index),
+                rf_ret=rf_ret,
+                rf_label=rf_label,
+            ),
+            benchmark_name: build_period_table(
+                benchmark_nav.reindex(nav_df.index),
+                turnover_zero,
+                rf_ret=rf_ret,
+                rf_label=rf_label,
+            ),
         },
         names=["组合", "区间"],
     )
