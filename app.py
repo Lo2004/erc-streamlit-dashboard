@@ -191,6 +191,225 @@ def cached_final_risk_control(
     )
 
 
+# ────────────────────────── 自定义 ERC 风控 cached 函数 ──────────────────────────
+
+
+@st.cache_data(show_spinner=False)
+def cached_custom_risk_control(
+    asset_prices: pd.DataFrame,
+    benchmark_prices: pd.DataFrame,
+    weights: pd.DataFrame,
+    erc_nav: pd.Series,
+    risk_window: int,
+    rank_window: int,
+    rank_min_periods: int,
+    floor: float,
+    smooth_span: int,
+    rebalance: str,
+    rebalance_day: int,
+):
+    asset_returns = asset_prices.pct_change().dropna()
+    benchmark_returns = benchmark_prices.pct_change().reindex(asset_returns.index).fillna(0.0).squeeze()
+    common_idx = asset_returns.index.intersection(weights.index).intersection(erc_nav.index)
+    asset_returns = asset_returns.reindex(common_idx).dropna()
+    weights = weights.reindex(common_idx).ffill()
+    erc_nav = erc_nav.reindex(common_idx).dropna()
+    benchmark_returns = benchmark_returns.reindex(common_idx).fillna(0.0)
+    return run_risk_control_overlay(
+        asset_returns=asset_returns,
+        erc_weights=weights,
+        erc_nav=erc_nav,
+        benchmark_returns=benchmark_returns,
+        risk_window=risk_window,
+        rank_window=rank_window,
+        rank_min_periods=rank_min_periods,
+        floor=floor,
+        smooth_span=smooth_span,
+        rebalance=rebalance,
+        rebalance_day=rebalance_day,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def cached_custom_final_risk_control(
+    asset_prices: pd.DataFrame,
+    benchmark_prices: pd.DataFrame,
+    weights: pd.DataFrame,
+    erc_nav: pd.Series,
+    rebalance: str,
+    rebalance_day: int,
+):
+    asset_returns = asset_prices.pct_change().dropna()
+    benchmark_returns = benchmark_prices.pct_change().reindex(asset_returns.index).fillna(0.0).squeeze()
+    common_idx = asset_returns.index.intersection(weights.index).intersection(erc_nav.index)
+    asset_returns = asset_returns.reindex(common_idx).dropna()
+    weights = weights.reindex(common_idx).ffill()
+    erc_nav = erc_nav.reindex(common_idx).dropna()
+    benchmark_returns = benchmark_returns.reindex(common_idx).fillna(0.0)
+    return run_final_indicator_overlay(
+        asset_returns=asset_returns,
+        erc_weights=weights,
+        erc_nav=erc_nav,
+        benchmark_returns=benchmark_returns,
+        rebalance=rebalance,
+        rebalance_day=rebalance_day,
+    )
+
+
+# ────────────────────────── 风控面板渲染函数 ──────────────────────────
+
+
+def render_risk1_panel(signals: pd.DataFrame, exposure: pd.Series, overlay_result: dict, asset_labels: dict) -> None:
+    """Render 风控1 tab content. Must be called inside a tab/container context."""
+    latest_signal_date = overlay_result["latest_signal_date"]
+    previous_signal_date = overlay_result["previous_signal_date"]
+
+    if pd.isna(latest_signal_date):
+        st.warning("当前样本不足以形成有效风险分数，请降低窗口参数或延长样本。")
+        return
+
+    latest_score = signals.loc[latest_signal_date, "risk_score"]
+    latest_exposure = exposure.loc[latest_signal_date]
+    if pd.notna(previous_signal_date):
+        prev_score = signals.loc[previous_signal_date, "risk_score"]
+        prev_exposure = exposure.loc[previous_signal_date]
+        score_delta = latest_score - prev_score
+        exposure_delta = latest_exposure - prev_exposure
+    else:
+        score_delta = None
+        exposure_delta = None
+
+    st.subheader("风险状态")
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("最新风控信号日", latest_signal_date.strftime("%Y-%m-%d"))
+    r2.metric(
+        "综合风险分数",
+        f"{latest_score:.2%}",
+        delta=None if score_delta is None else f"{score_delta:+.2%}",
+        delta_color="inverse",
+    )
+    r3.metric(
+        "目标总仓位",
+        f"{latest_exposure:.2%}",
+        delta=None if exposure_delta is None else f"{exposure_delta:+.2%}",
+    )
+    r4.metric("现金仓位", f"{1.0 - latest_exposure:.2%}")
+    st.caption(
+        "综合风险分数 = PC1解释度分位、平均绝对相关性分位、ERC滚动波动率分位的等权平均；"
+        "目标总仓位按最低仓位约束和平滑参数生成，并在次一交易日参与收益计算；现金收益固定为 0。"
+    )
+
+    factor_latest = pd.DataFrame(
+        [
+            {
+                "指标": "PC1解释度",
+                "原始值": signals.loc[latest_signal_date, "pc1"],
+                "历史分位": signals.loc[latest_signal_date, "q_pc1"],
+            },
+            {
+                "指标": "平均绝对相关性",
+                "原始值": signals.loc[latest_signal_date, "abs_corr"],
+                "历史分位": signals.loc[latest_signal_date, "q_abs_corr"],
+            },
+            {
+                "指标": "ERC年化波动率",
+                "原始值": signals.loc[latest_signal_date, "erc_vol"],
+                "历史分位": signals.loc[latest_signal_date, "q_vol"],
+            },
+        ]
+    ).assign(
+        原始值=lambda df: df["原始值"].map(lambda x: "NA" if pd.isna(x) else f"{x:.2%}"),
+        历史分位=lambda df: df["历史分位"].map(lambda x: "NA" if pd.isna(x) else f"{x:.2%}"),
+    )
+    render_plain_table(factor_latest)
+    st.plotly_chart(risk_signal_chart(signals, exposure), width="stretch")
+
+    st.subheader("风控增强表现")
+    risk_labels = {**asset_labels, "cash": "现金(收益=0)"}
+    st.plotly_chart(
+        baseline_dashboard_chart(
+            overlay_result["nav_df"],
+            overlay_result["drawdown_df"],
+            overlay_result["weights"],
+            risk_labels,
+        ),
+        width="stretch",
+    )
+    st.subheader("风控增强核心指标")
+    render_metric_block("收益与风险", overlay_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
+    render_metric_block("回撤", overlay_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
+    render_metric_block("交易与胜率", overlay_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
+
+
+def render_risk2_panel(signals: pd.DataFrame, exposure: pd.Series, overlay_result: dict, asset_labels: dict) -> None:
+    """Render 风控2 tab content. Must be called inside a tab/container context."""
+    latest_signal_date = overlay_result["latest_signal_date"]
+    previous_signal_date = overlay_result["previous_signal_date"]
+
+    if pd.isna(latest_signal_date):
+        st.warning("当前样本不足以形成有效 Final 风险强度，请延长样本。")
+        return
+
+    latest_strength = signals.loc[latest_signal_date, "final_strength"]
+    latest_exposure = exposure.loc[latest_signal_date]
+    if pd.notna(previous_signal_date):
+        prev_strength = signals.loc[previous_signal_date, "final_strength"]
+        prev_exposure = exposure.loc[previous_signal_date]
+        strength_delta = latest_strength - prev_strength
+        exposure_delta = latest_exposure - prev_exposure
+    else:
+        strength_delta = None
+        exposure_delta = None
+
+    st.subheader("风险状态")
+    f1, f2, f3, f4 = st.columns(4)
+    f1.metric("最新风控信号日", latest_signal_date.strftime("%Y-%m-%d"))
+    f2.metric(
+        "Final强度",
+        f"{latest_strength:.2f}",
+        delta=None if strength_delta is None else f"{strength_delta:+.2f}",
+        delta_color="inverse",
+    )
+    f3.metric(
+        "目标总仓位",
+        f"{latest_exposure:.2%}",
+        delta=None if exposure_delta is None else f"{exposure_delta:+.2%}",
+    )
+    f4.metric("现金仓位", f"{1.0 - latest_exposure:.2%}")
+    st.caption(
+        "风控2口径：Final = PC1强度(MA30/Mean252) × 下行半方差GM63；"
+        "Final强度 = Final / Final_MA252。强度 >=1.5 配 50% 现金，1.2 至 1.5 配 25% 现金，其余现金为 0；"
+        "现金收益固定为 0，执行仓位次一交易日生效。"
+    )
+
+    factor_latest = pd.DataFrame(
+        [
+            {"指标": "Final指标", "数值": signals.loc[latest_signal_date, "final_indicator"]},
+            {"指标": "Final_MA252", "数值": signals.loc[latest_signal_date, "final_ma"]},
+            {"指标": "PC1强度(MA30/Mean252)", "数值": signals.loc[latest_signal_date, "pc1_strength"]},
+            {"指标": "下行半方差GM63", "数值": signals.loc[latest_signal_date, "gm_dsv"]},
+        ]
+    ).assign(数值=lambda df: df["数值"].map(lambda x: "NA" if pd.isna(x) else f"{x:.6f}"))
+    render_plain_table(factor_latest)
+    st.plotly_chart(final_signal_chart(signals, exposure), width="stretch")
+
+    st.subheader("风控2增强表现")
+    risk_labels = {**asset_labels, "cash": "现金(收益=0)"}
+    st.plotly_chart(
+        baseline_dashboard_chart(
+            overlay_result["nav_df"],
+            overlay_result["drawdown_df"],
+            overlay_result["weights"],
+            risk_labels,
+        ),
+        width="stretch",
+    )
+    st.subheader("风控2核心指标")
+    render_metric_block("收益与风险", overlay_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
+    render_metric_block("回撤", overlay_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
+    render_metric_block("交易与胜率", overlay_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
+
+
 st.title("ERC 组合看板")
 
 with st.sidebar:
@@ -598,6 +817,7 @@ with page_custom:
             st.error(f"自定义组合计算失败：{exc}")
         else:
             selected_labels = {code: custom_names.get(code, code) for code in selected_codes}
+            benchmark_name = custom_names.get(benchmark_code, benchmark_code)
             custom_nav = custom_result["nav_df"]
             custom_weights = custom_result["weights"]
             latest_custom_weights = custom_weights.iloc[-1].rename(index=selected_labels)
@@ -609,20 +829,72 @@ with page_custom:
 
             st.caption(
                 f"实际计算区间为 {custom_nav.index.min().strftime('%Y-%m-%d')} 至 {custom_nav.index.max().strftime('%Y-%m-%d')}；"
-                f"对比基准为 {custom_names.get(benchmark_code, benchmark_code)}。"
+                f"对比基准为 {benchmark_name}。"
             )
-            st.plotly_chart(nav_chart(custom_nav), width="stretch")
-            st.plotly_chart(drawdown_chart(custom_result["drawdown_df"]), width="stretch")
-            st.plotly_chart(weights_chart(custom_weights, selected_labels), width="stretch")
 
-            st.subheader("核心指标")
-            render_metric_block("收益与风险", custom_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
-            render_metric_block("回撤", custom_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
-            render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
+            tab_overview, tab_risk1, tab_risk2 = st.tabs(["表现", "风控1", "风控2"])
 
-            st.subheader("最新一期持仓")
-            render_plain_table(
-                latest_custom_weights.rename_axis("资产")
-                .reset_index(name="最新权重")
-                .assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}"))
-            )
+            with tab_overview:
+                st.plotly_chart(nav_chart(custom_nav), width="stretch")
+                st.plotly_chart(drawdown_chart(custom_result["drawdown_df"]), width="stretch")
+                st.plotly_chart(weights_chart(custom_weights, selected_labels), width="stretch")
+
+                st.subheader("核心指标")
+                render_metric_block("收益与风险", custom_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
+                render_metric_block("回撤", custom_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
+                render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
+
+                st.subheader("最新一期持仓")
+                render_plain_table(
+                    latest_custom_weights.rename_axis("资产")
+                    .reset_index(name="最新权重")
+                    .assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}"))
+                )
+
+            with tab_risk1:
+                try:
+                    custom_risk1 = cached_custom_risk_control(
+                        custom_result["asset_prices"],
+                        custom_result["benchmark_prices"],
+                        custom_result["weights"],
+                        custom_nav["ERC"],
+                        int(risk_window), int(rank_window), int(rank_min_periods),
+                        float(exposure_floor_pct) / 100.0, int(smooth_span),
+                        rebalance, int(rebalance_day),
+                    )
+                except Exception as exc:
+                    st.error(f"风控增强计算失败：{exc}")
+                else:
+                    metric_idx = custom_risk1["metrics"].index
+                    old_level = metric_idx.levels[metric_idx.names.index("组合")]
+                    new_level = pd.Index([benchmark_name if v == "沪深300" else v for v in old_level])
+                    custom_risk1["metrics"].index = metric_idx.set_levels(new_level, level="组合")
+                    custom_risk1["nav_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                    custom_risk1["drawdown_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                    render_risk1_panel(
+                        custom_risk1["signals"], custom_risk1["exposure"],
+                        custom_risk1, selected_labels,
+                    )
+
+            with tab_risk2:
+                try:
+                    custom_risk2 = cached_custom_final_risk_control(
+                        custom_result["asset_prices"],
+                        custom_result["benchmark_prices"],
+                        custom_result["weights"],
+                        custom_nav["ERC"],
+                        rebalance, int(rebalance_day),
+                    )
+                except Exception as exc:
+                    st.error(f"风控2计算失败：{exc}")
+                else:
+                    metric_idx = custom_risk2["metrics"].index
+                    old_level = metric_idx.levels[metric_idx.names.index("组合")]
+                    new_level = pd.Index([benchmark_name if v == "沪深300" else v for v in old_level])
+                    custom_risk2["metrics"].index = metric_idx.set_levels(new_level, level="组合")
+                    custom_risk2["nav_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                    custom_risk2["drawdown_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                    render_risk2_panel(
+                        custom_risk2["signals"], custom_risk2["exposure"],
+                        custom_risk2, selected_labels,
+                    )

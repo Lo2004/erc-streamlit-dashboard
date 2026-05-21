@@ -91,6 +91,7 @@ def run_custom_backtest(
         "metrics": metrics,
         "common_start": common_start,
         "common_end": common_end,
+        "benchmark_prices": aligned_prices[[benchmark_code]],
     }
 
 

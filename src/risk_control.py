@@ -197,13 +197,14 @@ def _build_overlay_result(
     signals: pd.DataFrame,
     exposure: pd.Series,
     signal_schedule: pd.DatetimeIndex,
+    benchmark_name: str = "沪深300",
 ) -> dict[str, pd.DataFrame | pd.Series | pd.Timestamp]:
     exposure_lag = exposure.shift(1).fillna(exposure.iloc[0])
     risk_weights = erc_weights.mul(exposure_lag, axis=0)
     risk_weights["cash"] = 1.0 - exposure_lag
     risk_returns = (risk_weights[asset_returns.columns] * asset_returns).sum(axis=1).rename("ERC+风控增强")
     risk_nav = (1.0 + risk_returns).cumprod().rename("ERC+风控增强")
-    benchmark_nav = (1.0 + benchmark_returns).cumprod().rename("沪深300")
+    benchmark_nav = (1.0 + benchmark_returns).cumprod().rename(benchmark_name)
 
     nav_df = pd.concat([erc_nav.rename("ERC基准"), risk_nav, benchmark_nav], axis=1).dropna()
     drawdown_df = nav_df / nav_df.cummax() - 1.0
@@ -216,7 +217,7 @@ def _build_overlay_result(
         {
             "ERC基准": build_period_table(nav_df["ERC基准"], turnover_erc),
             "ERC+风控增强": build_period_table(nav_df["ERC+风控增强"], turnover_risk),
-            "沪深300": build_period_table(nav_df["沪深300"], turnover_zero),
+            benchmark_name: build_period_table(nav_df[benchmark_name], turnover_zero),
         },
         names=["组合", "区间"],
     )
@@ -250,6 +251,7 @@ def run_risk_control_overlay(
     smooth_span: int = 10,
     rebalance: str = "M",
     rebalance_day: int = 1,
+    benchmark_name: str = "沪深300",
 ) -> dict[str, pd.DataFrame | pd.Series | pd.Timestamp]:
     idx = asset_returns.index.intersection(erc_weights.index).intersection(erc_nav.index).intersection(benchmark_returns.index)
     asset_returns = asset_returns.reindex(idx).fillna(0.0)
@@ -286,6 +288,7 @@ def run_risk_control_overlay(
         signals=signals,
         exposure=exposure,
         signal_schedule=signal_schedule,
+        benchmark_name=benchmark_name,
     )
 
 
@@ -296,6 +299,7 @@ def run_final_indicator_overlay(
     benchmark_returns: pd.Series,
     rebalance: str = "M",
     rebalance_day: int = 1,
+    benchmark_name: str = "沪深300",
 ) -> dict[str, pd.DataFrame | pd.Series | pd.Timestamp]:
     idx = asset_returns.index.intersection(erc_weights.index).intersection(erc_nav.index).intersection(benchmark_returns.index)
     asset_returns = asset_returns.reindex(idx).fillna(0.0)
@@ -319,4 +323,5 @@ def run_final_indicator_overlay(
         signals=signals,
         exposure=exposure,
         signal_schedule=signal_schedule,
+        benchmark_name=benchmark_name,
     )
