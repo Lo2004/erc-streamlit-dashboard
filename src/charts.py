@@ -262,3 +262,115 @@ def risk_signal_chart(signals: pd.DataFrame, exposure: pd.Series) -> go.Figure:
     fig.update_yaxes(title_text="波动率", tickformat=".0%", row=3, col=1, secondary_y=True)
     fig.update_xaxes(rangeslider_visible=True, row=3, col=1)
     return fig
+
+
+def final_signal_chart(signals: pd.DataFrame, exposure: pd.Series) -> go.Figure:
+    plot_df = signals.join(exposure.rename("目标总仓位"), how="left")
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.07,
+        subplot_titles=("Final 指标与均线", "Final 强度与目标总仓位", "构成项：PC1强度与下行半方差"),
+        row_heights=[0.33, 0.34, 0.33],
+        specs=[[{}], [{"secondary_y": True}], [{"secondary_y": True}]],
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=plot_df["final_indicator"],
+            name="Final指标",
+            mode="lines",
+            line=dict(color="#6f42c1", width=1.6),
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=plot_df["final_ma"],
+            name="Final_MA252",
+            mode="lines",
+            line=dict(color="#334155", width=1.4, dash="dash"),
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=plot_df["final_strength"],
+            name="Final强度",
+            mode="lines",
+            line=dict(color="#8c564b", width=1.8),
+            hovertemplate="%{y:.2f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+        secondary_y=False,
+    )
+    for threshold, color, name in [(1.0, "#7f7f7f", "阈值1.0"), (1.2, "#f97316", "阈值1.2"), (1.5, "#dc2626", "阈值1.5")]:
+        fig.add_hline(y=threshold, line_dash="dash", line_color=color, line_width=1, row=2, col=1)
+        fig.add_trace(
+            go.Scatter(x=[None], y=[None], name=name, mode="lines", line=dict(color=color, dash="dash")),
+            row=2,
+            col=1,
+            secondary_y=False,
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=plot_df["目标总仓位"],
+            name="目标总仓位",
+            mode="lines",
+            line=dict(color="#111111", width=2.0),
+            hovertemplate="%{y:.2%}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+        secondary_y=True,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=plot_df["pc1_strength"],
+            name="PC1强度(MA30/Mean252)",
+            mode="lines",
+            line=dict(color="#2f6fbb", width=1.5),
+            hovertemplate="%{y:.2f}<extra></extra>",
+        ),
+        row=3,
+        col=1,
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=plot_df["gm_dsv"],
+            name="下行半方差GM63",
+            mode="lines",
+            line=dict(color="#0f766e", width=1.5),
+        ),
+        row=3,
+        col=1,
+        secondary_y=True,
+    )
+
+    fig.update_layout(
+        template="plotly_white",
+        height=820,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=20, r=20, t=80, b=20),
+    )
+    fig.update_yaxes(title_text="指标值", row=1, col=1)
+    fig.update_yaxes(title_text="强度", row=2, col=1, secondary_y=False)
+    fig.update_yaxes(title_text="总仓位", tickformat=".0%", range=[0, 1], row=2, col=1, secondary_y=True)
+    fig.update_yaxes(title_text="PC1强度", row=3, col=1, secondary_y=False)
+    fig.update_yaxes(title_text="GM63", row=3, col=1, secondary_y=True)
+    fig.update_xaxes(rangeslider_visible=True, row=3, col=1)
+    return fig
