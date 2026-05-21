@@ -48,6 +48,7 @@ def run_custom_backtest(
     end_date: str,
     lookback: int,
     rebalance: str,
+    rebalance_day: int = 1,
     names: dict[str, str] | None = None,
 ):
     if len(selected_codes) < 2:
@@ -67,7 +68,7 @@ def run_custom_backtest(
     if len(asset_prices) <= lookback + 5:
         raise ValueError("共同样本过短，请减少回看窗口或调整资产/日期。")
 
-    result = run_erc_backtest(asset_prices, lookback=lookback, rebalance=rebalance)
+    result = run_erc_backtest(asset_prices, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
     benchmark_name = (names or {}).get(benchmark_code, benchmark_code)
     benchmark_ret = aligned_prices[benchmark_code].pct_change().reindex(result["returns"].index).fillna(0.0)
     benchmark_nav = (1.0 + benchmark_ret).cumprod().rename(benchmark_name)
@@ -101,6 +102,7 @@ def run_custom_backtest_with_benchmark(
     end_date: str,
     lookback: int,
     rebalance: str,
+    rebalance_day: int = 1,
     names: dict[str, str] | None = None,
 ):
     return run_custom_backtest(
@@ -111,5 +113,6 @@ def run_custom_backtest_with_benchmark(
         end_date=end_date,
         lookback=lookback,
         rebalance=rebalance,
+        rebalance_day=rebalance_day,
         names=names,
     )

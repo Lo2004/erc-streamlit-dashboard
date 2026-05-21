@@ -25,6 +25,7 @@ def nav_chart(nav_df: pd.DataFrame) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=20, r=20, t=60, b=20),
     )
+    fig.update_xaxes(rangeslider_visible=True)
     return fig
 
 
@@ -51,6 +52,7 @@ def drawdown_chart(drawdown_df: pd.DataFrame) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=20, r=20, t=60, b=20),
     )
+    fig.update_xaxes(rangeslider_visible=True)
     return fig
 
 

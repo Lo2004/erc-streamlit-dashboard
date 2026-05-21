@@ -124,14 +124,14 @@ def render_plain_table(source: pd.DataFrame) -> None:
 
 
 @st.cache_data(show_spinner=False)
-def cached_compute_baseline(path: str, start_date: str, lookback: int, rebalance: str):
-    return compute_baseline(path, start_date, lookback, rebalance)
+def cached_compute_baseline(path: str, start_date: str, lookback: int, rebalance: str, rebalance_day: int):
+    return compute_baseline(path, start_date, lookback, rebalance, rebalance_day)
 
 
 @st.cache_data(show_spinner=False)
-def cached_compute_baseline_upload(uploaded_file, start_date: str, lookback: int, rebalance: str):
+def cached_compute_baseline_upload(uploaded_file, start_date: str, lookback: int, rebalance: str, rebalance_day: int):
     prices, names = load_baseline_data(uploaded_file)
-    return compute_baseline_from_prices(prices, names, start_date, lookback, rebalance)
+    return compute_baseline_from_prices(prices, names, start_date, lookback, rebalance, rebalance_day)
 
 
 @st.cache_data(show_spinner=False)
@@ -146,8 +146,23 @@ with st.sidebar:
     st.header("参数")
     start_date = st.date_input("回测起点", value=pd.Timestamp("2010-01-01"))
     lookback = st.number_input("ERC回看窗口（日）", min_value=20, max_value=252, value=60, step=5)
-    rebalance_label = st.radio("调仓频率", ["月度", "日度"], horizontal=True)
-    rebalance = "M" if rebalance_label == "月度" else "D"
+    rebalance_label = st.radio("调仓频率", ["月度", "周度", "日度"], horizontal=True)
+    rebalance_map = {"月度": "M", "周度": "W", "日度": "D"}
+    rebalance = rebalance_map[rebalance_label]
+    if rebalance == "D":
+        rebalance_day = 1
+        st.caption("日度调仓：每个交易日更新权重，次一交易日生效。")
+    else:
+        period_label = "每月" if rebalance == "M" else "每周"
+        max_day = 23 if rebalance == "M" else 5
+        rebalance_day = st.number_input(
+            f"{period_label}第几个交易日调仓",
+            min_value=1,
+            max_value=max_day,
+            value=1,
+            step=1,
+        )
+        st.caption(f"{period_label}第 {rebalance_day} 个交易日计算新权重，次一交易日生效；若当期交易日不足，则使用当期最后一个交易日。")
 
 baseline_upload = None
 
@@ -176,10 +191,10 @@ with page_baseline:
 
     try:
         if baseline_upload is not None:
-            data = cached_compute_baseline_upload(baseline_upload, str(start_date), int(lookback), rebalance)
+            data = cached_compute_baseline_upload(baseline_upload, str(start_date), int(lookback), rebalance, int(rebalance_day))
             baseline_source_label = baseline_upload.name
         elif DATA_PATH.exists():
-            data = cached_compute_baseline(str(DATA_PATH), str(start_date), int(lookback), rebalance)
+            data = cached_compute_baseline(str(DATA_PATH), str(start_date), int(lookback), rebalance, int(rebalance_day))
             baseline_source_label = str(DATA_PATH)
         else:
             raise FileNotFoundError(f"找不到数据文件：{DATA_PATH}")
@@ -320,6 +335,7 @@ with page_custom:
                 end_date=str(custom_end),
                 lookback=int(lookback),
                 rebalance=rebalance,
+                rebalance_day=int(rebalance_day),
                 names=custom_names,
             )
         except Exception as exc:

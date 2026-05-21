@@ -73,6 +73,7 @@ def compute_erc_weights(
     returns: pd.DataFrame,
     lookback: int = 60,
     rebalance: str = "M",
+    rebalance_day: int = 1,
 ) -> pd.DataFrame:
     idx = returns.index
     weights = pd.DataFrame(np.nan, index=idx, columns=returns.columns)
@@ -80,10 +81,14 @@ def compute_erc_weights(
 
     if rebalance == "D":
         rebalance_dates = idx[lookback - 1 :]
-    elif rebalance == "M":
-        rebalance_dates = idx.to_series().groupby(pd.Grouper(freq="ME")).max().dropna()
+    elif rebalance in {"W", "M"}:
+        freq = "W-FRI" if rebalance == "W" else "ME"
+        grouped_dates = idx.to_series().groupby(pd.Grouper(freq=freq))
+        nth = max(int(rebalance_day), 1) - 1
+        rebalance_dates = grouped_dates.apply(lambda dates: dates.iloc[min(nth, len(dates) - 1)] if len(dates) else pd.NaT)
+        rebalance_dates = rebalance_dates.dropna()
     else:
-        raise ValueError("rebalance must be 'D' or 'M'.")
+        raise ValueError("rebalance must be 'D', 'W', or 'M'.")
 
     for dt in rebalance_dates:
         pos = idx.get_loc(dt)
@@ -102,9 +107,10 @@ def run_erc_backtest(
     asset_prices: pd.DataFrame,
     lookback: int = 60,
     rebalance: str = "M",
+    rebalance_day: int = 1,
 ) -> dict[str, pd.DataFrame | pd.Series]:
     returns = asset_prices.pct_change().dropna()
-    weights = compute_erc_weights(returns, lookback=lookback, rebalance=rebalance)
+    weights = compute_erc_weights(returns, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
     port_ret = (weights * returns).sum(axis=1)
     nav = (1.0 + port_ret).cumprod().rename("ERC")
     drawdown = (nav / nav.cummax() - 1.0).rename("ERC")

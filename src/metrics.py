@@ -96,6 +96,8 @@ METRIC_COLUMNS = [
 def build_period_table(nav: pd.Series, turnover: pd.Series) -> pd.DataFrame:
     end_date = nav.index.max()
     periods = {
+        "全样本": nav.index.min(),
+        "近10年": end_date - pd.DateOffset(years=10),
         "近5年": end_date - pd.DateOffset(years=5),
         "近2年": end_date - pd.DateOffset(years=2),
         "近1年": end_date - pd.DateOffset(years=1),
