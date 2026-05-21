@@ -7,23 +7,69 @@ import pandas as pd
 import streamlit as st
 
 from src.baseline import ASSET_LABELS, DATA_PATH, compute_baseline, compute_baseline_from_prices, load_baseline_data
-from src.charts import baseline_dashboard_chart, final_signal_chart
+from src.charts import baseline_dashboard_chart, final_signal_chart, hierarchical_weights_chart
 from src.custom import (
     SAMPLE_CUSTOM_PATH,
     available_window,
     build_asset_catalog,
     load_custom_price_data,
     run_custom_backtest_with_benchmark,
+    run_two_layer_erc,
 )
 from src.risk_control import run_final_indicator_overlay
+
+import uuid
 
 
 st.set_page_config(page_title="基准 ERC 看板", layout="wide")
 
 
+_HIGHER_BETTER = {"年化收益", "夏普比率", "卡玛比率", "月胜率", "日胜率", "最大回撤"}
+_LOWER_BETTER = {"年化波动率", "月均换手率", "最长回撤修复期(天)"}
+# 最大回撤为负值，数值越大（越接近0）越好，归入 higher
+# 无风险利率指标为文本，不做加粗
+
+
+def _parse_metric_val(raw) -> float | None:
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if s == "NA":
+        return None
+    try:
+        return float(s.replace("%", ""))
+    except ValueError:
+        return None
+
+
 def render_metric_block(title: str, source: pd.DataFrame, columns: list[str]) -> None:
     st.markdown(f"##### {title}")
     table = source.loc[:, columns].copy()
+    groups = table.index.get_level_values("组合").unique()
+    periods = table.index.get_level_values("区间").unique()
+
+    # Determine best group per (period, column)
+    best_group: dict[tuple[str, str], str] = {}
+    for col in columns:
+        direction = "higher" if col in _HIGHER_BETTER else ("lower" if col in _LOWER_BETTER else None)
+        if direction is None:
+            continue
+        for period in periods:
+            candidates: list[tuple[float, str]] = []
+            for group in groups:
+                try:
+                    raw_val = table.loc[(group, period), col]
+                    v = _parse_metric_val(raw_val)
+                    if v is not None:
+                        candidates.append((v, group))
+                except (KeyError, TypeError):
+                    pass
+            if candidates:
+                if direction == "higher":
+                    best_group[(period, col)] = max(candidates, key=lambda x: x[0])[1]
+                else:
+                    best_group[(period, col)] = min(candidates, key=lambda x: x[0])[1]
+
     html = [
         """
         <style>
@@ -59,6 +105,9 @@ def render_metric_block(title: str, source: pd.DataFrame, columns: list[str]) ->
             color: #4b5563;
             min-width: 72px;
         }
+        .metric-table .best {
+            font-weight: 700;
+        }
         </style>
         <table class="metric-table">
         """
@@ -66,7 +115,7 @@ def render_metric_block(title: str, source: pd.DataFrame, columns: list[str]) ->
     header = "<tr><th>组合</th><th>区间</th>" + "".join(f"<th>{escape(col)}</th>" for col in columns) + "</tr>"
     html.append(header)
 
-    for group in table.index.get_level_values("组合").unique():
+    for group in groups:
         group_table = table.loc[group]
         row_count = len(group_table)
         for i, (period, row) in enumerate(group_table.iterrows()):
@@ -74,7 +123,12 @@ def render_metric_block(title: str, source: pd.DataFrame, columns: list[str]) ->
             if i == 0:
                 cells.append(f'<td class="group-cell" rowspan="{row_count}">{escape(str(group))}</td>')
             cells.append(f'<td class="period-cell">{escape(str(period))}</td>')
-            cells.extend(f"<td>{escape(str(row[col]))}</td>" for col in columns)
+            for col in columns:
+                raw = str(row[col])
+                if best_group.get((period, col)) == group:
+                    cells.append(f'<td class="best">{escape(raw)}</td>')
+                else:
+                    cells.append(f"<td>{escape(raw)}</td>")
             html.append("<tr>" + "".join(cells) + "</tr>")
 
     html.append("</table>")
@@ -174,6 +228,45 @@ def cached_final_risk_control(
         benchmark_returns=csi300_returns,
         rebalance=rebalance,
         rebalance_day=rebalance_day,
+        pc1_window=pc1_window,
+        pc1_ma_window=pc1_ma_window,
+        pc1_mean_window=pc1_mean_window,
+        dsv_window=dsv_window,
+        final_ma_window=final_ma_window,
+        mid_threshold=mid_threshold,
+        high_threshold=high_threshold,
+        mid_cash=mid_cash,
+        high_cash=high_cash,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def cached_nested_risk_control(
+    asset_returns: pd.DataFrame,
+    erc_weights: pd.DataFrame,
+    erc_nav: pd.Series,
+    benchmark_returns: pd.Series,
+    rebalance: str,
+    rebalance_day: int,
+    pc1_window: int,
+    pc1_ma_window: int,
+    pc1_mean_window: int,
+    dsv_window: int,
+    final_ma_window: int,
+    mid_threshold: float,
+    high_threshold: float,
+    mid_cash: float,
+    high_cash: float,
+    benchmark_name: str = "沪深300",
+):
+    return run_final_indicator_overlay(
+        asset_returns=asset_returns,
+        erc_weights=erc_weights,
+        erc_nav=erc_nav,
+        benchmark_returns=benchmark_returns,
+        rebalance=rebalance,
+        rebalance_day=rebalance_day,
+        benchmark_name=benchmark_name,
         pc1_window=pc1_window,
         pc1_ma_window=pc1_ma_window,
         pc1_mean_window=pc1_mean_window,
@@ -306,8 +399,20 @@ def render_tail_risk_panel(signals: pd.DataFrame, exposure: pd.Series, overlay_r
     render_metric_block("交易与胜率", overlay_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
 
 
-st.title("ERC 组合看板")
-
+col_title, col_dl = st.columns([3, 1])
+with col_title:
+    st.title("ERC 组合看板")
+with col_dl:
+    st.markdown("<br>", unsafe_allow_html=True)
+    report_path = Path("data/ERC风险平价组合 - 风险控制策略.pdf")
+    if report_path.exists():
+        st.download_button(
+            "下载原始报告",
+            data=report_path.read_bytes(),
+            file_name=report_path.name,
+            mime="application/pdf",
+            use_container_width=True,
+        )
 with st.sidebar:
     st.header("参数")
     start_date = st.date_input("回测起点", value=pd.Timestamp("2010-01-01"))
@@ -524,119 +629,357 @@ with page_custom:
         )
     )
 
-    label_by_code = {row["代码"]: f"{row['名称']} | {row['代码']}" for _, row in catalog.iterrows()}
-    default_codes = catalog["代码"].head(min(3, len(catalog))).tolist()
-    selected_codes = st.multiselect(
-        "选择纳入 ERC 的资产",
-        options=catalog["代码"].tolist(),
-        default=default_codes,
-        format_func=lambda code: label_by_code.get(code, code),
-    )
-    benchmark_default = "H00300.CSI" if "H00300.CSI" in catalog["代码"].tolist() else catalog["代码"].iloc[0]
-    benchmark_code = st.selectbox(
-        "选择对比基准资产",
-        options=catalog["代码"].tolist(),
-        index=catalog["代码"].tolist().index(benchmark_default),
-        format_func=lambda code: label_by_code.get(code, code),
-    )
+    # ── Mode toggle ──
+    if "erc_mode" not in st.session_state:
+        st.session_state.erc_mode = "基础"
+    erc_mode = st.radio("ERC模式", ["基础", "嵌套"], horizontal=True, key="erc_mode")
 
-    if len(selected_codes) >= 2:
-        common_start, common_end = available_window(custom_prices, list(dict.fromkeys(selected_codes + [benchmark_code])))
-        st.info(f"所选资产共同可用区间：{common_start.strftime('%Y-%m-%d')} 至 {common_end.strftime('%Y-%m-%d')}")
-        custom_col1, custom_col2, custom_col3 = st.columns([1, 1, 1])
-        custom_start = custom_col1.date_input("自定义回测起点", value=common_start, min_value=common_start, max_value=common_end)
-        custom_end = custom_col2.date_input("自定义回测终点", value=common_end, min_value=common_start, max_value=common_end)
-        run_button = custom_col3.button("开始计算", type="primary", width="stretch")
-    else:
-        st.warning("请至少选择 2 个资产。")
-        run_button = False
+    if erc_mode == "基础":
+        label_by_code = {row["代码"]: f"{row['名称']} | {row['代码']}" for _, row in catalog.iterrows()}
+        default_codes = catalog["代码"].head(min(3, len(catalog))).tolist()
+        selected_codes = st.multiselect(
+            "选择纳入 ERC 的资产",
+            options=catalog["代码"].tolist(),
+            default=default_codes,
+            format_func=lambda code: label_by_code.get(code, code),
+        )
+        benchmark_default = "H00300.CSI" if "H00300.CSI" in catalog["代码"].tolist() else catalog["代码"].iloc[0]
+        benchmark_code = st.selectbox(
+            "选择对比基准资产",
+            options=catalog["代码"].tolist(),
+            index=catalog["代码"].tolist().index(benchmark_default),
+            format_func=lambda code: label_by_code.get(code, code),
+        )
 
-    if run_button:
-        try:
-            custom_result = run_custom_backtest_with_benchmark(
-                prices=custom_prices,
-                selected_codes=selected_codes,
-                benchmark_code=benchmark_code,
-                start_date=str(custom_start),
-                end_date=str(custom_end),
-                lookback=int(lookback),
-                rebalance=rebalance,
-                rebalance_day=int(rebalance_day),
-                names=custom_names,
-            )
-        except Exception as exc:
-            st.error(f"自定义组合计算失败：{exc}")
+        if len(selected_codes) >= 2:
+            common_start, common_end = available_window(custom_prices, list(dict.fromkeys(selected_codes + [benchmark_code])))
+            st.info(f"所选资产共同可用区间：{common_start.strftime('%Y-%m-%d')} 至 {common_end.strftime('%Y-%m-%d')}")
+            custom_col1, custom_col2, custom_col3 = st.columns([1, 1, 1])
+            custom_start = custom_col1.date_input("自定义回测起点", value=common_start, min_value=common_start, max_value=common_end)
+            custom_end = custom_col2.date_input("自定义回测终点", value=common_end, min_value=common_start, max_value=common_end)
+            run_button = custom_col3.button("开始计算", type="primary", width="stretch")
         else:
-            selected_labels = {code: custom_names.get(code, code) for code in selected_codes}
-            benchmark_name = custom_names.get(benchmark_code, benchmark_code)
-            custom_nav = custom_result["nav_df"]
-            custom_weights = custom_result["weights"]
-            latest_custom_weights = custom_weights.iloc[-1].rename(index=selected_labels)
+            st.warning("请至少选择 2 个资产。")
+            run_button = False
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("起算日", custom_nav.index.min().strftime("%Y-%m-%d"))
-            c2.metric("截止日", custom_nav.index.max().strftime("%Y-%m-%d"))
-            c3.metric("组合净值", f"{custom_nav['ERC'].iloc[-1]:.2f}")
+        if run_button:
+            try:
+                custom_result = run_custom_backtest_with_benchmark(
+                    prices=custom_prices,
+                    selected_codes=selected_codes,
+                    benchmark_code=benchmark_code,
+                    start_date=str(custom_start),
+                    end_date=str(custom_end),
+                    lookback=int(lookback),
+                    rebalance=rebalance,
+                    rebalance_day=int(rebalance_day),
+                    names=custom_names,
+                )
+            except Exception as exc:
+                st.error(f"自定义组合计算失败：{exc}")
+            else:
+                selected_labels = {code: custom_names.get(code, code) for code in selected_codes}
+                benchmark_name = custom_names.get(benchmark_code, benchmark_code)
+                custom_nav = custom_result["nav_df"]
+                custom_weights = custom_result["weights"]
+                latest_custom_weights = custom_weights.iloc[-1].rename(index=selected_labels)
 
-            st.caption(
-                f"实际计算区间为 {custom_nav.index.min().strftime('%Y-%m-%d')} 至 {custom_nav.index.max().strftime('%Y-%m-%d')}；"
-                f"对比基准为 {benchmark_name}。"
+                c1, c2, c3 = st.columns(3)
+                c1.metric("起算日", custom_nav.index.min().strftime("%Y-%m-%d"))
+                c2.metric("截止日", custom_nav.index.max().strftime("%Y-%m-%d"))
+                c3.metric("组合净值", f"{custom_nav['ERC'].iloc[-1]:.2f}")
+
+                st.caption(
+                    f"实际计算区间为 {custom_nav.index.min().strftime('%Y-%m-%d')} 至 {custom_nav.index.max().strftime('%Y-%m-%d')}；"
+                    f"对比基准为 {benchmark_name}。"
+                )
+
+                tab_overview, tab_tail_risk = st.tabs(["表现", "尾部风险"])
+
+                with tab_overview:
+                    st.plotly_chart(
+                        baseline_dashboard_chart(
+                            custom_nav,
+                            custom_result["drawdown_df"],
+                            custom_weights,
+                            selected_labels,
+                        ),
+                        width="stretch",
+                    )
+
+                    st.subheader("核心指标")
+                    render_sharpe_note()
+                    render_metric_block("收益与风险", custom_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
+                    render_metric_block("回撤", custom_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
+                    render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
+
+                    st.subheader("最新一期持仓")
+                    render_plain_table(
+                        latest_custom_weights.rename_axis("资产")
+                        .reset_index(name="最新权重")
+                        .assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}"))
+                    )
+
+                with tab_tail_risk:
+                    try:
+                        custom_tail_risk = cached_custom_final_risk_control(
+                            custom_result["asset_prices"],
+                            custom_result["benchmark_prices"],
+                            custom_result["weights"],
+                            custom_nav["ERC"],
+                            rebalance, int(rebalance_day),
+                            int(pc1_window),
+                            int(pc1_ma_window),
+                            int(pc1_mean_window),
+                            int(dsv_window),
+                            int(final_ma_window),
+                            float(mid_threshold),
+                            float(high_threshold),
+                            float(mid_cash_pct) / 100.0,
+                            float(high_cash_pct) / 100.0,
+                        )
+                    except Exception as exc:
+                        st.error(f"尾部风险计算失败：{exc}")
+                    else:
+                        metric_idx = custom_tail_risk["metrics"].index
+                        old_level = metric_idx.levels[metric_idx.names.index("组合")]
+                        new_level = pd.Index([benchmark_name if v == "沪深300" else v for v in old_level])
+                        custom_tail_risk["metrics"].index = metric_idx.set_levels(new_level, level="组合")
+                        custom_tail_risk["nav_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                        custom_tail_risk["drawdown_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                        render_tail_risk_panel(
+                            custom_tail_risk["signals"], custom_tail_risk["exposure"],
+                            custom_tail_risk, selected_labels,
+                        )
+    else:
+        # ── Nested mode ──
+        code_list = catalog["代码"].tolist()
+        asset_options = {code: custom_names.get(code, code) for code in code_list}
+
+        st.markdown("##### 可用资产池")
+        st.markdown('<style>.asset-tag{display:inline-block;background:#f4f5f8;border:1px solid #dce0e8;border-radius:6px;padding:5px 12px;margin:4px 6px 4px 0;font-size:13px;white-space:nowrap;transition:background .15s}.asset-tag:hover{background:#e8ebf1}.asset-tag .code{color:#8e94a0;font-size:11px;margin-left:4px}</style>', unsafe_allow_html=True)
+        tag_html = "".join(
+            f'<span class="asset-tag">{asset_options[code]} <span class="code">({code})</span></span>'
+            for code in code_list
+        )
+        st.markdown(f'<div style="line-height:2.4">{tag_html}</div>', unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # Initialize nested groups
+        if "nested_groups" not in st.session_state:
+            st.session_state.nested_groups = []
+
+        col_groups, col_bench = st.columns([3, 1])
+        with col_groups:
+            st.markdown("##### 大组定义")
+
+            # Render each group
+            to_delete = None
+            for gi, group in enumerate(st.session_state.nested_groups):
+                gid = group["id"]
+                with st.container(border=True):
+                    gcols = st.columns([3, 1])
+                    with gcols[0]:
+                        gname = st.text_input(
+                            "组名",
+                            value=group.get("name", f"大组{gi+1}"),
+                            key=f"gname_{gid}",
+                        )
+                    with gcols[1]:
+                        if st.button("删除大组", key=f"del_{gid}"):
+                            to_delete = gid
+                    g_assets = st.multiselect(
+                        "资产",
+                        options=code_list,
+                        default=[c for c in group.get("assets", []) if c in code_list],
+                        format_func=lambda c: asset_options.get(c, c),
+                        key=f"gassets_{gid}",
+                    )
+                    # Persist to session_state
+                    group["name"] = gname
+                    group["assets"] = g_assets
+
+            if to_delete is not None:
+                st.session_state.nested_groups = [
+                    g for g in st.session_state.nested_groups if g["id"] != to_delete
+                ]
+                st.rerun()
+
+            if st.button("+ 添加大组", use_container_width=True):
+                import uuid as _uuid
+                st.session_state.nested_groups.append({
+                    "id": str(_uuid.uuid4()),
+                    "name": f"大组{len(st.session_state.nested_groups)+1}",
+                    "assets": [],
+                })
+                st.rerun()
+
+        with col_bench:
+            st.markdown("##### 对比基准")
+            benchmark_default = "H00300.CSI" if "H00300.CSI" in code_list else code_list[0]
+            bm_default_idx = code_list.index(benchmark_default) if benchmark_default in code_list else 0
+            benchmark_code = st.selectbox(
+                "基准资产",
+                options=code_list,
+                index=bm_default_idx,
+                format_func=lambda c: asset_options.get(c, c),
+                key="nested_benchmark",
             )
 
-            tab_overview, tab_tail_risk = st.tabs(["表现", "尾部风险"])
+        # Date range & run
+        all_group_codes = list(dict.fromkeys(
+            code for g in st.session_state.nested_groups for code in g.get("assets", [])
+        ))
+        has_valid_groups = len(st.session_state.nested_groups) >= 2 and len(all_group_codes) > 0
 
-            with tab_overview:
-                st.plotly_chart(
-                    baseline_dashboard_chart(
-                        custom_nav,
-                        custom_result["drawdown_df"],
-                        custom_weights,
-                        selected_labels,
-                    ),
-                    width="stretch",
+        if has_valid_groups:
+            needed = list(dict.fromkeys(all_group_codes + [benchmark_code]))
+            n_common_start, n_common_end = available_window(custom_prices, needed)
+            nest_col1, nest_col2, nest_col3 = st.columns([1, 1, 1])
+            nested_start = nest_col1.date_input(
+                "回测起点", value=n_common_start,
+                min_value=n_common_start, max_value=n_common_end,
+                key="nested_start",
+            )
+            nested_end = nest_col2.date_input(
+                "回测终点", value=n_common_end,
+                min_value=n_common_start, max_value=n_common_end,
+                key="nested_end",
+            )
+            run_nested = nest_col3.button("开始计算", type="primary", width="stretch", key="run_nested")
+        else:
+            st.warning("请至少定义 2 个大组，并为大组添加资产。")
+            run_nested = False
+
+        if run_nested and has_valid_groups:
+            try:
+                nested_result = run_two_layer_erc(
+                    prices=custom_prices,
+                    groups=st.session_state.nested_groups,
+                    benchmark_code=benchmark_code,
+                    start_date=str(nested_start),
+                    end_date=str(nested_end),
+                    lookback=int(lookback),
+                    rebalance=rebalance,
+                    rebalance_day=int(rebalance_day),
+                    names=custom_names,
+                )
+            except Exception as exc:
+                st.error(f"两层 ERC 计算失败：{exc}")
+            else:
+                benchmark_name = custom_names.get(benchmark_code, benchmark_code)
+                n_nav = nested_result["nav_df"]
+                n_dd = nested_result["drawdown_df"]
+                n_metrics = nested_result["metrics"]
+                n_eff_w = nested_result["effective_weights"]
+                n_group_w = nested_result["group_weights"]
+                n_group_navs = nested_result["group_navs"]
+
+                # Build label mapping
+                all_used_codes = list(n_eff_w.columns)
+                n_labels = {code: custom_names.get(code, code) for code in all_used_codes}
+
+                # Build group assignments for chart coloring
+                group_assignments: dict[str, list[str]] = {}
+                for g in st.session_state.nested_groups:
+                    gname = g["name"] or "未命名"
+                    codes_in = [c for c in (g.get("assets") or []) if c in all_used_codes]
+                    if codes_in:
+                        group_assignments[gname] = codes_in
+
+                n_col1, n_col2, n_col3 = st.columns(3)
+                n_col1.metric("起算日", n_nav.index.min().strftime("%Y-%m-%d"))
+                n_col2.metric("截止日", n_nav.index.max().strftime("%Y-%m-%d"))
+                n_col3.metric("两层ERC净值", f"{n_nav['两层ERC'].iloc[-1]:.2f}")
+
+                st.caption(
+                    f"实际计算区间为 {n_nav.index.min().strftime('%Y-%m-%d')} 至 {n_nav.index.max().strftime('%Y-%m-%d')}；"
+                    f"对比基准为 {benchmark_name}。"
                 )
 
-                st.subheader("核心指标")
-                render_sharpe_note()
-                render_metric_block("收益与风险", custom_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
-                render_metric_block("回撤", custom_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
-                render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
+                nest_tab1, nest_tab2, nest_tab3 = st.tabs(["表现", "两层权重", "尾部风险"])
 
-                st.subheader("最新一期持仓")
-                render_plain_table(
-                    latest_custom_weights.rename_axis("资产")
-                    .reset_index(name="最新权重")
-                    .assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}"))
-                )
+                with nest_tab1:
+                    st.plotly_chart(
+                        baseline_dashboard_chart(n_nav, n_dd, n_eff_w, n_labels),
+                        width="stretch",
+                    )
+                    st.subheader("核心指标")
+                    render_sharpe_note()
+                    render_metric_block("收益与风险", n_metrics, ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
+                    render_metric_block("回撤", n_metrics, ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
+                    render_metric_block("交易与胜率", n_metrics, ["月均换手率", "月胜率", "日胜率"])
 
-            with tab_tail_risk:
-                try:
-                    custom_tail_risk = cached_custom_final_risk_control(
-                        custom_result["asset_prices"],
-                        custom_result["benchmark_prices"],
-                        custom_result["weights"],
-                        custom_nav["ERC"],
-                        rebalance, int(rebalance_day),
-                        int(pc1_window),
-                        int(pc1_ma_window),
-                        int(pc1_mean_window),
-                        int(dsv_window),
-                        int(final_ma_window),
-                        float(mid_threshold),
-                        float(high_threshold),
-                        float(mid_cash_pct) / 100.0,
-                        float(high_cash_pct) / 100.0,
+                with nest_tab2:
+                    st.plotly_chart(
+                        hierarchical_weights_chart(n_eff_w, group_assignments, n_labels),
+                        width="stretch",
                     )
-                except Exception as exc:
-                    st.error(f"尾部风险计算失败：{exc}")
-                else:
-                    metric_idx = custom_tail_risk["metrics"].index
-                    old_level = metric_idx.levels[metric_idx.names.index("组合")]
-                    new_level = pd.Index([benchmark_name if v == "沪深300" else v for v in old_level])
-                    custom_tail_risk["metrics"].index = metric_idx.set_levels(new_level, level="组合")
-                    custom_tail_risk["nav_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
-                    custom_tail_risk["drawdown_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
-                    render_tail_risk_panel(
-                        custom_tail_risk["signals"], custom_tail_risk["exposure"],
-                        custom_tail_risk, selected_labels,
+                    st.subheader("大组间权重")
+                    render_plain_table(
+                        n_group_w.rename_axis("日期").iloc[-1:].T.reset_index()
+                        .rename(columns={"index": "大组", n_group_w.index[-1]: "权重"})
+                        .assign(**{"权重": lambda df: df["权重"].map(lambda x: f"{x:.2%}")})
                     )
+
+                with nest_tab3:
+                    tail_method = st.radio(
+                        "尾部风险信号计算口径",
+                        ["按全部入选资产（不分组）", "按大组（每组视为一个资产）"],
+                        horizontal=True,
+                        key="nested_tail_method",
+                    )
+
+                    # Build common tail-risk inputs
+                    bm_ret_all = nested_result["asset_prices"][benchmark_code].pct_change()
+                    erc_nav_s = n_nav["两层ERC"]
+
+                    if tail_method == "按全部入选资产（不分组）":
+                        asset_codes_for_tail = list(n_eff_w.columns)
+                        tail_prices = nested_result["asset_prices"][asset_codes_for_tail]
+                        tail_returns = tail_prices.pct_change().dropna()
+                        tail_weights = n_eff_w
+                        tail_labels = n_labels
+                    else:
+                        group_ret_dict = {}
+                        group_weights_for_tail = {}
+                        for gname, grets in nested_result["group_returns"].items():
+                            group_ret_dict[gname] = grets
+                        tail_returns = pd.DataFrame(group_ret_dict).dropna()
+                        tail_weights = n_group_w.reindex(tail_returns.index).ffill()
+                        tail_labels = {g: g for g in nested_result["group_names"]}
+
+                    try:
+                        nested_tail = cached_nested_risk_control(
+                            asset_returns=tail_returns,
+                            erc_weights=tail_weights,
+                            erc_nav=erc_nav_s,
+                            benchmark_returns=bm_ret_all,
+                            rebalance=rebalance,
+                            rebalance_day=int(rebalance_day),
+                            pc1_window=int(pc1_window),
+                            pc1_ma_window=int(pc1_ma_window),
+                            pc1_mean_window=int(pc1_mean_window),
+                            dsv_window=int(dsv_window),
+                            final_ma_window=int(final_ma_window),
+                            mid_threshold=float(mid_threshold),
+                            high_threshold=float(high_threshold),
+                            mid_cash=float(mid_cash_pct) / 100.0,
+                            high_cash=float(high_cash_pct) / 100.0,
+                            benchmark_name=benchmark_name,
+                        )
+                    except Exception as exc:
+                        st.error(f"尾部风险计算失败：{exc}")
+                    else:
+                        # Replace the default "沪深300" label with the actual benchmark name
+                        mt_idx = nested_tail["metrics"].index
+                        old_lvl = mt_idx.levels[mt_idx.names.index("组合")]
+                        new_lvl = pd.Index([benchmark_name if v == "沪深300" else v for v in old_lvl])
+                        nested_tail["metrics"].index = mt_idx.set_levels(new_lvl, level="组合")
+                        nested_tail["nav_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                        nested_tail["drawdown_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                        render_tail_risk_panel(
+                            nested_tail["signals"], nested_tail["exposure"],
+                            nested_tail, tail_labels,
+                        )

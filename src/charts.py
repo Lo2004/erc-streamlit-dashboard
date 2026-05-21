@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import itertools
+
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -294,3 +296,69 @@ def final_signal_chart(signals: pd.DataFrame, exposure: pd.Series) -> go.Figure:
     fig.update_yaxes(title_text="GM63", row=3, col=1, secondary_y=True)
     _style_bottom_rangeslider(fig)
     return fig
+
+
+# ── Hierarchical weight chart palettes ──
+_GROUP_PALETTES = [
+    ["#1a3a5c", "#2e6da4", "#5a9bd5", "#8bbae3"],  # Blues
+    ["#7b241c", "#c0392b", "#e0746e", "#edb9b5"],  # Reds
+    ["#1a5e32", "#27ae60", "#6fcf97", "#a9dfbf"],  # Greens
+    ["#a04000", "#d35400", "#eb984e", "#f0c09a"],  # Oranges
+    ["#4a235a", "#7d3c98", "#a569bd", "#cdaedb"],  # Purples
+    ["#0e6251", "#17a589", "#48c9b0", "#85e5ce"],  # Teals
+    ["#7d6608", "#d4ac0d", "#f1c40f", "#f7dc6f"],  # Yellows
+    ["#1b4f72", "#3498db", "#85c1e9", "#bdd7f0"],  # Light blues
+]
+
+
+def hierarchical_weights_chart(
+    effective_weights: pd.DataFrame,
+    group_assignments: dict[str, list[str]],
+    asset_labels: dict[str, str],
+) -> go.Figure:
+    """
+    Stacked-area weight chart where color hue encodes the group and
+    shading differentiates assets within the same group.
+    """
+    fig = go.Figure()
+
+    color_map: dict[str, str] = {}
+    for palette_idx, (gname, codes) in enumerate(group_assignments.items()):
+        palette = _GROUP_PALETTES[palette_idx % len(_GROUP_PALETTES)]
+        codes_present = [c for c in codes if c in effective_weights.columns]
+        for j, code in enumerate(codes_present):
+            color_map[code] = palette[j % len(palette)]
+
+    for code in effective_weights.columns:
+        label = asset_labels.get(code, code)
+        gname = _find_group_for_code(code, group_assignments)
+        trace_name = f"{gname} > {label}" if gname else label
+        fig.add_trace(
+            go.Scatter(
+                x=effective_weights.index,
+                y=effective_weights[code],
+                name=trace_name,
+                mode="lines",
+                stackgroup="one",
+                line=dict(width=0.5, color=color_map.get(code, "#777777")),
+                hovertemplate="%{y:.2%}<extra>%{fullData.name}</extra>",
+            )
+        )
+
+    fig.update_layout(
+        title="两层 ERC 权重分解",
+        template="plotly_white",
+        height=420,
+        hovermode="x unified",
+        yaxis_tickformat=".0%",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font_size=11),
+        margin=dict(l=20, r=20, t=60, b=20),
+    )
+    return fig
+
+
+def _find_group_for_code(code: str, group_assignments: dict[str, list[str]]) -> str | None:
+    for gname, codes in group_assignments.items():
+        if code in codes:
+            return gname
+    return None

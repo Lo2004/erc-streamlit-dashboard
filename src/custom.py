@@ -130,3 +130,151 @@ def run_custom_backtest_with_benchmark(
         rebalance_day=rebalance_day,
         names=names,
     )
+
+
+def run_two_layer_erc(
+    prices: pd.DataFrame,
+    groups: list[dict],
+    benchmark_code: str,
+    start_date: str,
+    end_date: str,
+    lookback: int,
+    rebalance: str,
+    rebalance_day: int = 1,
+    names: dict[str, str] | None = None,
+):
+    """
+    两层 ERC 回测。
+
+    Parameters
+    ----------
+    groups : list[dict]
+        [{"name": "权益", "assets": [code, ...]}, ...]
+        同一资产可出现在多个大组。
+
+    Returns
+    -------
+    dict with keys:
+        nav_df, drawdown_df, metrics — for final result vs benchmark
+        group_navs — each group's standalone NAV (dict of Series)
+        group_weights — final between-group weights (DataFrame)
+        effective_weights — each original asset's net weight (DataFrame)
+        asset_prices — aligned price panel for all assets
+    """
+    from src.erc import run_erc_backtest
+
+    if not groups or all(len(g["assets"]) == 0 for g in groups):
+        raise ValueError("请至少为一个大组添加资产。")
+    if benchmark_code not in prices.columns:
+        raise ValueError("基准资产不在上传数据中。")
+
+    benchmark_name = (names or {}).get(benchmark_code, benchmark_code)
+
+    # Collect all unique asset codes across groups
+    all_asset_codes = list(dict.fromkeys(code for g in groups for code in g["assets"]))
+    all_needed = list(dict.fromkeys(all_asset_codes + [benchmark_code]))
+
+    # Align common date window
+    common_start, common_end = available_window(prices, all_needed)
+    start = max(pd.Timestamp(start_date), common_start)
+    end = min(pd.Timestamp(end_date), common_end)
+    if start >= end:
+        raise ValueError("所选资产在当前回测区间没有足够的共同数据。")
+
+    aligned = prices.loc[start:end, all_needed].dropna(how="any")
+    if len(aligned) <= lookback + 5:
+        raise ValueError("共同样本过短，请减少回看窗口或调整资产/日期。")
+
+    # ── Layer 1: within-group ERC ──
+    group_returns: dict[str, pd.Series] = {}
+    group_weights: dict[str, pd.DataFrame] = {}
+    group_navs: dict[str, pd.Series] = {}
+
+    for g in groups:
+        gname = g["name"]
+        codes = [c for c in g["assets"] if c in aligned.columns]
+        if len(codes) == 0:
+            continue
+
+        if len(codes) == 1:
+            col = codes[0]
+            px = aligned[col]
+            ret = px.pct_change().dropna()
+            g_ret_idx = ret.index.intersection(aligned.index)
+            group_returns[gname] = ret.reindex(g_ret_idx)
+            group_weights[gname] = pd.DataFrame({col: 1.0}, index=g_ret_idx)
+            group_navs[gname] = (1.0 + ret.reindex(g_ret_idx)).cumprod()
+        else:
+            sub_prices = aligned[codes]
+            res = run_erc_backtest(sub_prices, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
+            ret = res["returns"]
+            g_ret_idx = ret.index.intersection(aligned.index)
+            group_returns[gname] = ret.reindex(g_ret_idx)
+            group_weights[gname] = res["weights"].reindex(g_ret_idx).ffill()
+            group_navs[gname] = (1.0 + ret.reindex(g_ret_idx)).cumprod()
+
+    if len(group_returns) < 2:
+        raise ValueError("两层 ERC 要求至少 2 个大组（当前 %d 个）。" % len(group_returns))
+
+    # ── Layer 2: between-group ERC ──
+    group_price_panel = pd.concat(
+        {gname: gnv for gname, gnv in group_navs.items()},
+        axis=1, join="inner",
+    ).dropna()
+
+    layer2 = run_erc_backtest(group_price_panel, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
+    l2_weights = layer2["weights"]
+
+    # ── Effective weights: asset-level net weight = layer2_weight * sub_weight ──
+    common_eff_idx = l2_weights.index
+    effective_weights = pd.DataFrame(0.0, index=common_eff_idx, columns=all_asset_codes)
+
+    for g in groups:
+        gname = g["name"]
+        if gname not in l2_weights.columns or gname not in group_weights:
+            continue
+        sub_w = group_weights[gname].reindex(common_eff_idx).ffill().fillna(0.0)
+        for code in sub_w.columns:
+            if code in effective_weights.columns:
+                effective_weights[code] += l2_weights[gname] * sub_w[code]
+
+    # ── Final NAV & benchmark ──
+    final_ret = layer2["returns"].rename("两层ERC")
+    final_nav = (1.0 + final_ret).cumprod().rename("两层ERC")
+
+    benchmark_ret = aligned[benchmark_code].pct_change().reindex(final_nav.index).fillna(0.0)
+    benchmark_nav = (1.0 + benchmark_ret).cumprod().rename(benchmark_name)
+
+    nav_df = pd.concat([final_nav, benchmark_nav], axis=1).dropna()
+    drawdown_df = nav_df / nav_df.cummax() - 1.0
+    turnover_zero = pd.Series(0.0, index=nav_df.index)
+    rf_ret, rf_label = load_risk_free_returns(RISK_FREE_PATH)
+    metrics = pd.concat(
+        {
+            "两层ERC": build_period_table(
+                final_nav.reindex(nav_df.index),
+                layer2["turnover"].reindex(nav_df.index),
+                rf_ret=rf_ret,
+                rf_label=rf_label,
+            ),
+            benchmark_name: build_period_table(
+                benchmark_nav.reindex(nav_df.index),
+                turnover_zero,
+                rf_ret=rf_ret,
+                rf_label=rf_label,
+            ),
+        },
+        names=["组合", "区间"],
+    )
+
+    return {
+        "group_names": list(group_returns.keys()),
+        "nav_df": nav_df,
+        "drawdown_df": drawdown_df,
+        "metrics": metrics,
+        "group_navs": group_navs,
+        "effective_weights": effective_weights,
+        "group_weights": l2_weights,
+        "asset_prices": aligned,
+        "group_returns": group_returns,
+    }
