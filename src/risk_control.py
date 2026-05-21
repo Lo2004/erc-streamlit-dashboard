@@ -7,53 +7,6 @@ from src.erc import compute_rebalance_schedule
 from src.metrics import build_period_table
 
 
-def rolling_pc1_explained(returns: pd.DataFrame, window: int = 60) -> pd.Series:
-    out = pd.Series(np.nan, index=returns.index, name="PC1解释度")
-    min_rows = max(20, int(window * 0.7))
-
-    for end_pos in range(window - 1, len(returns)):
-        win = returns.iloc[end_pos - window + 1 : end_pos + 1].dropna()
-        if len(win) < min_rows or win.shape[1] < 3:
-            continue
-
-        std = win.std(ddof=0).replace(0, np.nan)
-        z = ((win - win.mean()) / std).replace([np.inf, -np.inf], np.nan).dropna()
-        if len(z) < min_rows or z.shape[1] < 3:
-            continue
-
-        corr = np.corrcoef(z.values, rowvar=False)
-        corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
-        eigvals = np.linalg.eigvalsh(corr)
-        total = float(eigvals.sum())
-        if total > 0:
-            out.iloc[end_pos] = float(eigvals[-1] / total)
-
-    return out
-
-
-def rolling_abs_corr(returns: pd.DataFrame, window: int = 60) -> pd.Series:
-    out = pd.Series(np.nan, index=returns.index, name="平均绝对相关性")
-    min_rows = max(20, int(window * 0.7))
-
-    for end_pos in range(window - 1, len(returns)):
-        win = returns.iloc[end_pos - window + 1 : end_pos + 1].dropna()
-        if len(win) < min_rows or win.shape[1] < 2:
-            continue
-
-        corr = win.corr().values
-        tri = corr[np.triu_indices_from(corr, k=1)]
-        out.iloc[end_pos] = float(np.nanmean(np.abs(tri)))
-
-    return out
-
-
-def rolling_pct_rank(series: pd.Series, window: int = 252, min_periods: int = 126) -> pd.Series:
-    return series.rolling(window=window, min_periods=min_periods).apply(
-        lambda values: pd.Series(values).rank(pct=True).iloc[-1],
-        raw=False,
-    )
-
-
 def rolling_pc1_cov_explained(returns: pd.DataFrame, window: int = 63) -> pd.Series:
     out = pd.Series(np.nan, index=returns.index, name=f"pc1_{window}")
     for end_pos in range(window - 1, len(returns)):
@@ -72,37 +25,6 @@ def rolling_dsv(series: pd.Series, window: int = 63, min_periods: int = 32) -> p
     return series.clip(upper=0.0).pow(2).rolling(window=window, min_periods=min_periods).mean()
 
 
-def build_risk_signals(
-    asset_returns: pd.DataFrame,
-    erc_returns: pd.Series,
-    risk_window: int = 60,
-    rank_window: int = 252,
-    rank_min_periods: int = 126,
-    trading_days: int = 252,
-) -> pd.DataFrame:
-    pc1 = rolling_pc1_explained(asset_returns, window=risk_window)
-    abs_corr = rolling_abs_corr(asset_returns, window=risk_window)
-    erc_vol = erc_returns.rolling(risk_window).std() * np.sqrt(trading_days)
-
-    q_pc1 = rolling_pct_rank(pc1, window=rank_window, min_periods=rank_min_periods)
-    q_corr = rolling_pct_rank(abs_corr, window=rank_window, min_periods=rank_min_periods)
-    q_vol = rolling_pct_rank(erc_vol, window=rank_window, min_periods=rank_min_periods)
-    risk_score = pd.concat([q_pc1, q_corr, q_vol], axis=1).mean(axis=1, skipna=False)
-
-    return pd.DataFrame(
-        {
-            "risk_score": risk_score,
-            "q_pc1": q_pc1,
-            "q_abs_corr": q_corr,
-            "q_vol": q_vol,
-            "pc1": pc1,
-            "abs_corr": abs_corr,
-            "erc_vol": erc_vol,
-        },
-        index=asset_returns.index,
-    )
-
-
 def build_final_signals(
     asset_returns: pd.DataFrame,
     erc_returns: pd.Series,
@@ -111,6 +33,10 @@ def build_final_signals(
     pc1_mean_window: int = 252,
     dsv_window: int = 63,
     final_ma_window: int = 252,
+    mid_threshold: float = 1.2,
+    high_threshold: float = 1.5,
+    mid_cash: float = 0.25,
+    high_cash: float = 0.50,
 ) -> pd.DataFrame:
     pc1 = rolling_pc1_cov_explained(asset_returns, window=pc1_window)
     pc1_ma = pc1.rolling(pc1_ma_window, min_periods=max(1, pc1_ma_window // 2)).mean()
@@ -138,38 +64,31 @@ def build_final_signals(
             "erc_dsv": erc_dsv,
             "sum_dsv": sum_dsv,
             "gm_dsv": gm_dsv,
-            "cash_target": _cash_target_from_strength(final_strength),
+            "cash_target": _cash_target_from_strength(
+                final_strength,
+                mid_threshold=mid_threshold,
+                high_threshold=high_threshold,
+                mid_cash=mid_cash,
+                high_cash=high_cash,
+            ),
         },
         index=asset_returns.index,
     )
 
 
-def _cash_target_from_strength(strength: pd.Series) -> pd.Series:
+def _cash_target_from_strength(
+    strength: pd.Series,
+    mid_threshold: float = 1.2,
+    high_threshold: float = 1.5,
+    mid_cash: float = 0.25,
+    high_cash: float = 0.50,
+) -> pd.Series:
     cash_target = pd.Series(0.0, index=strength.index, name="目标现金仓位")
-    cash_target[(strength >= 1.2) & (strength < 1.5)] = 0.25
-    cash_target[strength >= 1.5] = 0.50
+    mid_cash = float(np.clip(mid_cash, 0.0, 1.0))
+    high_cash = float(np.clip(high_cash, 0.0, 1.0))
+    cash_target[(strength >= mid_threshold) & (strength < high_threshold)] = mid_cash
+    cash_target[strength >= high_threshold] = high_cash
     return cash_target
-
-
-def build_exposure(
-    risk_score: pd.Series,
-    floor: float = 0.6,
-    smooth_span: int = 10,
-    rebalance: str = "M",
-    rebalance_day: int = 1,
-) -> tuple[pd.Series, pd.DatetimeIndex]:
-    floor = float(np.clip(floor, 0.0, 1.0))
-    base = (floor + (1.0 - floor) * (1.0 - risk_score).clip(0.0, 1.0)).rename("目标总仓位")
-    smoothed = base.ffill().fillna(1.0).ewm(span=smooth_span, adjust=False).mean().clip(floor, 1.0)
-
-    schedule = compute_rebalance_schedule(smoothed.index, rebalance=rebalance, rebalance_day=rebalance_day)
-    if len(schedule) == 0:
-        return smoothed.rename("目标总仓位"), schedule
-
-    flags = pd.Series(False, index=smoothed.index)
-    flags.loc[schedule.intersection(smoothed.index)] = True
-    exposure = smoothed.where(flags).ffill().fillna(smoothed.iloc[0]).rename("目标总仓位")
-    return exposure, schedule
 
 
 def build_threshold_exposure(
@@ -239,59 +158,6 @@ def _build_overlay_result(
     }
 
 
-def run_risk_control_overlay(
-    asset_returns: pd.DataFrame,
-    erc_weights: pd.DataFrame,
-    erc_nav: pd.Series,
-    benchmark_returns: pd.Series,
-    risk_window: int = 60,
-    rank_window: int = 252,
-    rank_min_periods: int = 126,
-    floor: float = 0.6,
-    smooth_span: int = 10,
-    rebalance: str = "M",
-    rebalance_day: int = 1,
-    benchmark_name: str = "沪深300",
-) -> dict[str, pd.DataFrame | pd.Series | pd.Timestamp]:
-    idx = asset_returns.index.intersection(erc_weights.index).intersection(erc_nav.index).intersection(benchmark_returns.index)
-    asset_returns = asset_returns.reindex(idx).fillna(0.0)
-    erc_weights = erc_weights.reindex(idx).ffill().fillna(1.0 / asset_returns.shape[1])
-    erc_nav = erc_nav.reindex(idx).dropna()
-    benchmark_returns = benchmark_returns.reindex(idx).fillna(0.0)
-
-    idx = idx.intersection(erc_nav.index)
-    asset_returns = asset_returns.reindex(idx)
-    erc_weights = erc_weights.reindex(idx)
-    benchmark_returns = benchmark_returns.reindex(idx)
-    erc_returns = (erc_weights * asset_returns).sum(axis=1).rename("ERC")
-
-    signals = build_risk_signals(
-        asset_returns=asset_returns,
-        erc_returns=erc_returns,
-        risk_window=risk_window,
-        rank_window=rank_window,
-        rank_min_periods=rank_min_periods,
-    )
-    exposure, signal_schedule = build_exposure(
-        signals["risk_score"],
-        floor=floor,
-        smooth_span=smooth_span,
-        rebalance=rebalance,
-        rebalance_day=rebalance_day,
-    )
-
-    return _build_overlay_result(
-        asset_returns=asset_returns,
-        erc_weights=erc_weights,
-        erc_nav=erc_nav,
-        benchmark_returns=benchmark_returns,
-        signals=signals,
-        exposure=exposure,
-        signal_schedule=signal_schedule,
-        benchmark_name=benchmark_name,
-    )
-
-
 def run_final_indicator_overlay(
     asset_returns: pd.DataFrame,
     erc_weights: pd.DataFrame,
@@ -300,6 +166,15 @@ def run_final_indicator_overlay(
     rebalance: str = "M",
     rebalance_day: int = 1,
     benchmark_name: str = "沪深300",
+    pc1_window: int = 63,
+    pc1_ma_window: int = 30,
+    pc1_mean_window: int = 252,
+    dsv_window: int = 63,
+    final_ma_window: int = 252,
+    mid_threshold: float = 1.2,
+    high_threshold: float = 1.5,
+    mid_cash: float = 0.25,
+    high_cash: float = 0.50,
 ) -> dict[str, pd.DataFrame | pd.Series | pd.Timestamp]:
     idx = asset_returns.index.intersection(erc_weights.index).intersection(erc_nav.index).intersection(benchmark_returns.index)
     asset_returns = asset_returns.reindex(idx).fillna(0.0)
@@ -313,7 +188,19 @@ def run_final_indicator_overlay(
     benchmark_returns = benchmark_returns.reindex(idx)
     erc_returns = (erc_weights * asset_returns).sum(axis=1).rename("ERC")
 
-    signals = build_final_signals(asset_returns=asset_returns, erc_returns=erc_returns)
+    signals = build_final_signals(
+        asset_returns=asset_returns,
+        erc_returns=erc_returns,
+        pc1_window=pc1_window,
+        pc1_ma_window=pc1_ma_window,
+        pc1_mean_window=pc1_mean_window,
+        dsv_window=dsv_window,
+        final_ma_window=final_ma_window,
+        mid_threshold=mid_threshold,
+        high_threshold=high_threshold,
+        mid_cash=mid_cash,
+        high_cash=high_cash,
+    )
     exposure, signal_schedule = build_threshold_exposure(signals, rebalance=rebalance, rebalance_day=rebalance_day)
     return _build_overlay_result(
         asset_returns=asset_returns,
