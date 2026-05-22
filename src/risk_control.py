@@ -133,13 +133,13 @@ def _build_overlay_result(
     turnover_erc = (erc_weights.diff().abs().sum(axis=1) / 2.0).reindex(nav_df.index).fillna(0.0)
     turnover_risk = (risk_weights.diff().abs().sum(axis=1) / 2.0).reindex(nav_df.index).fillna(0.0)
     turnover_zero = pd.Series(0.0, index=nav_df.index)
-    rf_ret, rf_label = load_risk_free_returns(RISK_FREE_PATH)
+    rf_ret, rf_nav, rf_label = load_risk_free_returns(RISK_FREE_PATH)
 
     metrics = pd.concat(
         {
-            "ERC基准": build_period_table(nav_df["ERC基准"], turnover_erc, rf_ret=rf_ret, rf_label=rf_label),
-            "ERC+风控增强": build_period_table(nav_df["ERC+风控增强"], turnover_risk, rf_ret=rf_ret, rf_label=rf_label),
-            benchmark_name: build_period_table(nav_df[benchmark_name], turnover_zero, rf_ret=rf_ret, rf_label=rf_label),
+            "ERC基准": build_period_table(nav_df["ERC基准"], turnover_erc, rf_ret=rf_ret, rf_label=rf_label, rf_nav=rf_nav),
+            "ERC+风控增强": build_period_table(nav_df["ERC+风控增强"], turnover_risk, rf_ret=rf_ret, rf_label=rf_label, rf_nav=rf_nav),
+            benchmark_name: build_period_table(nav_df[benchmark_name], turnover_zero, rf_ret=rf_ret, rf_label=rf_label, rf_nav=rf_nav),
         },
         names=["组合", "区间"],
     )
