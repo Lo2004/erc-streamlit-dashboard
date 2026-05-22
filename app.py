@@ -859,9 +859,15 @@ with page_custom:
             st.warning("请至少定义 2 个大组，并为大组添加资产。")
             run_nested = False
 
+        @st.cache_resource
+        def _nested_cache():
+            return type("_Cache", (), {"result": None, "benchmark_name": None})()
+
+        _cache = _nested_cache()
+
         if run_nested and has_valid_groups:
             try:
-                nested_result = run_two_layer_erc(
+                _cache.result = run_two_layer_erc(
                     prices=custom_prices,
                     groups=st.session_state.nested_groups,
                     benchmark_code=benchmark_code,
@@ -872,121 +878,125 @@ with page_custom:
                     rebalance_day=int(rebalance_day),
                     names=custom_names,
                 )
+                _cache.benchmark_name = custom_names.get(benchmark_code, benchmark_code)
             except Exception as exc:
                 st.error(f"两层 ERC 计算失败：{exc}")
-            else:
-                benchmark_name = custom_names.get(benchmark_code, benchmark_code)
-                n_nav = nested_result["nav_df"]
-                n_dd = nested_result["drawdown_df"]
-                n_metrics = nested_result["metrics"]
-                n_eff_w = nested_result["effective_weights"]
-                n_group_w = nested_result["group_weights"]
-                n_group_navs = nested_result["group_navs"]
+                _cache.result = None
 
-                # Build label mapping
-                all_used_codes = list(n_eff_w.columns)
-                n_labels = {code: custom_names.get(code, code) for code in all_used_codes}
+        if _cache.result is not None:
+            nested_result = _cache.result
+            benchmark_name = _cache.benchmark_name
+            n_nav = nested_result["nav_df"]
+            n_dd = nested_result["drawdown_df"]
+            n_metrics = nested_result["metrics"]
+            n_eff_w = nested_result["effective_weights"]
+            n_group_w = nested_result["group_weights"]
+            n_group_navs = nested_result["group_navs"]
 
-                # Build group assignments for chart coloring
-                group_assignments: dict[str, list[str]] = {}
-                for g in st.session_state.nested_groups:
-                    gname = g["name"] or "未命名"
-                    codes_in = [c for c in (g.get("assets") or []) if c in all_used_codes]
-                    if codes_in:
-                        group_assignments[gname] = codes_in
+            # Build label mapping
+            all_used_codes = list(n_eff_w.columns)
+            n_labels = {code: custom_names.get(code, code) for code in all_used_codes}
 
-                n_col1, n_col2, n_col3 = st.columns(3)
-                n_col1.metric("起算日", n_nav.index.min().strftime("%Y-%m-%d"))
-                n_col2.metric("截止日", n_nav.index.max().strftime("%Y-%m-%d"))
-                n_col3.metric("两层ERC净值", f"{n_nav['两层ERC'].iloc[-1]:.2f}")
+            # Build group assignments for chart coloring
+            group_assignments: dict[str, list[str]] = {}
+            for g in st.session_state.nested_groups:
+                gname = g["name"] or "未命名"
+                codes_in = [c for c in (g.get("assets") or []) if c in all_used_codes]
+                if codes_in:
+                    group_assignments[gname] = codes_in
 
-                st.caption(
-                    f"实际计算区间为 {n_nav.index.min().strftime('%Y-%m-%d')} 至 {n_nav.index.max().strftime('%Y-%m-%d')}；"
-                    f"对比基准为 {benchmark_name}。"
+            n_col1, n_col2, n_col3 = st.columns(3)
+            n_col1.metric("起算日", n_nav.index.min().strftime("%Y-%m-%d"))
+            n_col2.metric("截止日", n_nav.index.max().strftime("%Y-%m-%d"))
+            n_col3.metric("两层ERC净值", f"{n_nav['两层ERC'].iloc[-1]:.2f}")
+
+            st.caption(
+                f"实际计算区间为 {n_nav.index.min().strftime('%Y-%m-%d')} 至 {n_nav.index.max().strftime('%Y-%m-%d')}；"
+                f"对比基准为 {benchmark_name}。"
+            )
+
+            nest_tab1, nest_tab2, nest_tab3 = st.tabs(["表现", "两层权重", "尾部风险"])
+
+            with nest_tab1:
+                st.plotly_chart(
+                    baseline_dashboard_chart(n_nav, n_dd, n_eff_w, n_labels),
+                    width="stretch",
+                )
+                st.subheader("核心指标")
+                render_sharpe_note()
+                render_metric_block("收益与风险", n_metrics, ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
+                render_metric_block("回撤", n_metrics, ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
+                render_metric_block("交易与胜率", n_metrics, ["月均换手率", "月胜率", "日胜率"])
+
+            with nest_tab2:
+                st.plotly_chart(
+                    hierarchical_weights_chart(n_eff_w, group_assignments, n_labels),
+                    width="stretch",
+                )
+                st.subheader("大组间权重")
+                render_plain_table(
+                    n_group_w.rename_axis("日期").iloc[-1:].T.reset_index()
+                    .rename(columns={"index": "大组", n_group_w.index[-1]: "权重"})
+                    .assign(**{"权重": lambda df: df["权重"].map(lambda x: f"{x:.2%}")})
                 )
 
-                nest_tab1, nest_tab2, nest_tab3 = st.tabs(["表现", "两层权重", "尾部风险"])
+            with nest_tab3:
+                tail_method = st.radio(
+                    "尾部风险信号计算口径",
+                    ["按全部入选资产（不分组）", "按大组（每组视为一个资产）"],
+                    horizontal=True,
+                    key="nested_tail_method",
+                )
 
-                with nest_tab1:
-                    st.plotly_chart(
-                        baseline_dashboard_chart(n_nav, n_dd, n_eff_w, n_labels),
-                        width="stretch",
+                # Build common tail-risk inputs
+                bm_ret_all = nested_result["asset_prices"][benchmark_code].pct_change()
+                erc_nav_s = n_nav["两层ERC"]
+
+                if tail_method == "按全部入选资产（不分组）":
+                    asset_codes_for_tail = list(n_eff_w.columns)
+                    tail_prices = nested_result["asset_prices"][asset_codes_for_tail]
+                    tail_returns = tail_prices.pct_change().dropna()
+                    tail_weights = n_eff_w
+                    tail_labels = n_labels
+                else:
+                    group_ret_dict = {}
+                    group_weights_for_tail = {}
+                    for gname, grets in nested_result["group_returns"].items():
+                        group_ret_dict[gname] = grets
+                    tail_returns = pd.DataFrame(group_ret_dict).dropna()
+                    tail_weights = n_group_w.reindex(tail_returns.index).ffill()
+                    tail_labels = {g: g for g in nested_result["group_names"]}
+
+                try:
+                    nested_tail = cached_nested_risk_control(
+                        asset_returns=tail_returns,
+                        erc_weights=tail_weights,
+                        erc_nav=erc_nav_s,
+                        benchmark_returns=bm_ret_all,
+                        rebalance=rebalance,
+                        rebalance_day=int(rebalance_day),
+                        pc1_window=int(pc1_window),
+                        pc1_ma_window=int(pc1_ma_window),
+                        pc1_mean_window=int(pc1_mean_window),
+                        dsv_window=int(dsv_window),
+                        final_ma_window=int(final_ma_window),
+                        mid_threshold=float(mid_threshold),
+                        high_threshold=float(high_threshold),
+                        mid_cash=float(mid_cash_pct) / 100.0,
+                        high_cash=float(high_cash_pct) / 100.0,
+                        benchmark_name=benchmark_name,
                     )
-                    st.subheader("核心指标")
-                    render_sharpe_note()
-                    render_metric_block("收益与风险", n_metrics, ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
-                    render_metric_block("回撤", n_metrics, ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
-                    render_metric_block("交易与胜率", n_metrics, ["月均换手率", "月胜率", "日胜率"])
-
-                with nest_tab2:
-                    st.plotly_chart(
-                        hierarchical_weights_chart(n_eff_w, group_assignments, n_labels),
-                        width="stretch",
+                except Exception as exc:
+                    st.error(f"尾部风险计算失败：{exc}")
+                else:
+                    # Replace the default "沪深300" label with the actual benchmark name
+                    mt_idx = nested_tail["metrics"].index
+                    old_lvl = mt_idx.levels[mt_idx.names.index("组合")]
+                    new_lvl = pd.Index([benchmark_name if v == "沪深300" else v for v in old_lvl])
+                    nested_tail["metrics"].index = mt_idx.set_levels(new_lvl, level="组合")
+                    nested_tail["nav_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                    nested_tail["drawdown_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                    render_tail_risk_panel(
+                        nested_tail["signals"], nested_tail["exposure"],
+                        nested_tail, tail_labels,
                     )
-                    st.subheader("大组间权重")
-                    render_plain_table(
-                        n_group_w.rename_axis("日期").iloc[-1:].T.reset_index()
-                        .rename(columns={"index": "大组", n_group_w.index[-1]: "权重"})
-                        .assign(**{"权重": lambda df: df["权重"].map(lambda x: f"{x:.2%}")})
-                    )
-
-                with nest_tab3:
-                    tail_method = st.radio(
-                        "尾部风险信号计算口径",
-                        ["按全部入选资产（不分组）", "按大组（每组视为一个资产）"],
-                        horizontal=True,
-                        key="nested_tail_method",
-                    )
-
-                    # Build common tail-risk inputs
-                    bm_ret_all = nested_result["asset_prices"][benchmark_code].pct_change()
-                    erc_nav_s = n_nav["两层ERC"]
-
-                    if tail_method == "按全部入选资产（不分组）":
-                        asset_codes_for_tail = list(n_eff_w.columns)
-                        tail_prices = nested_result["asset_prices"][asset_codes_for_tail]
-                        tail_returns = tail_prices.pct_change().dropna()
-                        tail_weights = n_eff_w
-                        tail_labels = n_labels
-                    else:
-                        group_ret_dict = {}
-                        group_weights_for_tail = {}
-                        for gname, grets in nested_result["group_returns"].items():
-                            group_ret_dict[gname] = grets
-                        tail_returns = pd.DataFrame(group_ret_dict).dropna()
-                        tail_weights = n_group_w.reindex(tail_returns.index).ffill()
-                        tail_labels = {g: g for g in nested_result["group_names"]}
-
-                    try:
-                        nested_tail = cached_nested_risk_control(
-                            asset_returns=tail_returns,
-                            erc_weights=tail_weights,
-                            erc_nav=erc_nav_s,
-                            benchmark_returns=bm_ret_all,
-                            rebalance=rebalance,
-                            rebalance_day=int(rebalance_day),
-                            pc1_window=int(pc1_window),
-                            pc1_ma_window=int(pc1_ma_window),
-                            pc1_mean_window=int(pc1_mean_window),
-                            dsv_window=int(dsv_window),
-                            final_ma_window=int(final_ma_window),
-                            mid_threshold=float(mid_threshold),
-                            high_threshold=float(high_threshold),
-                            mid_cash=float(mid_cash_pct) / 100.0,
-                            high_cash=float(high_cash_pct) / 100.0,
-                            benchmark_name=benchmark_name,
-                        )
-                    except Exception as exc:
-                        st.error(f"尾部风险计算失败：{exc}")
-                    else:
-                        # Replace the default "沪深300" label with the actual benchmark name
-                        mt_idx = nested_tail["metrics"].index
-                        old_lvl = mt_idx.levels[mt_idx.names.index("组合")]
-                        new_lvl = pd.Index([benchmark_name if v == "沪深300" else v for v in old_lvl])
-                        nested_tail["metrics"].index = mt_idx.set_levels(new_lvl, level="组合")
-                        nested_tail["nav_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
-                        nested_tail["drawdown_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
-                        render_tail_risk_panel(
-                            nested_tail["signals"], nested_tail["exposure"],
-                            nested_tail, tail_labels,
-                        )

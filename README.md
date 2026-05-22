@@ -1,38 +1,259 @@
-# 基准 ERC 看板
+# ERC 组合看板 — 宏观因子回测与择时
 
-Streamlit MVP for the baseline ERC portfolio.
+交互式 Streamlit 看板，用于**等风险贡献（ERC）组合的回测、分析与尾部风险控制**。支持标准三资产基准组合、用户自定义资产池、两层嵌套分组 ERC，以及基于 PC1 协方差解释比与下行半方差的尾部风险信号系统。
 
-## Local Run
+---
+
+## 快速开始
 
 ```bash
 conda run -n pydata streamlit run app.py
 ```
 
-## Data
+打开 http://localhost:8501 即可使用。
 
-The app reads Wind's standard multi-row-header export:
+### 环境要求
 
-```text
-data/标准 ERC- 收盘价数据.xlsx
+| 依赖 | 版本 |
+|---|---|
+| Python | ≥ 3.12 |
+| streamlit | ≥ 1.55 |
+| pandas | ≥ 2.3 |
+| numpy | ≥ 2.4 |
+| scipy | ≥ 1.17 |
+| plotly | ≥ 6.6 |
+| openpyxl | ≥ 3.1 |
+
+### 环境
+
+已在 pydata conda 环境中配置好所有依赖：
+
+```bash
+conda activate pydata
 ```
 
-Required codes:
+---
 
-```text
-H20955.CSI
-CBA00661.CS
-CI005213.WI
-H00300.CSI
-AU9999.SGE
+## 项目架构
+
+```
+├── app.py                  # Streamlit 主入口（~1003 行）
+├── src/
+│   ├── __init__.py
+│   ├── data_loader.py      # Wind 标准格式 Excel 读取
+│   ├── erc.py              # ERC 权重复制求解 + 黄金对冲 + 回测引擎
+│   ├── metrics.py          # 绩效指标计算（年化/夏普/回撤/胜率等）
+│   ├── charts.py           # Plotly 图表（净值/回撤/持仓/Final 信号/分层权重）
+│   ├── baseline.py         # 基准组合（三资产 + 60/40 + 沪深300）
+│   ├── custom.py           # 自定义 ERC + 两层嵌套 ERC
+│   ├── risk_control.py     # 尾部风险信号系统（Final 指标生成 + 阈值现金仓位）
+│   └── trading_calendar.py # A 股交易日历加载与调仓日推算
+├── data/
+│   ├── 标准 ERC- 收盘价数据.xlsx     # 基准组合的 Wind 价格数据
+│   ├── 无风险利率-1年期国债指数.xlsx   # 夏普比率用的无风险利率
+│   ├── 自定义ERC-默认数据集.xlsx       # 自定义 ERC Tab 的默认示例数据
+│   ├── A股交易日历_2026-2028.xlsx      # 调仓日计算用交易日历
+│   └── ERC风险平价组合 - 风险控制策略.pdf  # 原始报告（下载用）
+├── docs/
+│   ├── ERC基准组合构建说明.md / .pdf   # 基准组合构建文档
+│   ├── summary_report.md / .pdf        # 风险平价策略总结报告（下载用）
+└── .streamlit/config.toml   # Streamlit 主题与服务器配置
 ```
 
-The custom ERC tab accepts the same Wind export format. If no file is uploaded,
-the demo file below is used:
+---
 
-```text
-data/测试拓展资产集.xlsx
+## 功能详解
+
+### 1. 基准 ERC Tab
+
+三资产 ERC 组合，固定为：
+
+| 资产 | Wind 代码 | 权重来源 |
+|------|-----------|----------|
+| 红利低波100 全收益 | H20955.CSI | 原始收盘价 |
+| 中债国债总财富（10 年以上） | CBA00661.CS | 原始收盘价 |
+| 黄金（中信，对冲沪深 300 beta） | CI005213.WI → 对冲后 | 见黄金对冲逻辑 |
+
+对比基准有两个：**60/40 组合**（60% 沪深 300 + 40% 中债 10 年以上）和**沪深 300**。
+
+**黄金对冲逻辑**（`src/erc.py:hedge_gold_series`）：
+
+以中信黄金行业指数（CI005213.WI）的对数收益率为因变量，沪深 300（H00300.CSI）和上海金（AU9999.SGE）的对数收益率为自变量，做全样本多元线性回归：
+
+$$r_{\text{黄金行业},t} = \alpha + \beta_{\text{权益}} \cdot r_{\text{HS300},t} + \beta_{\text{现货金}} \cdot r_{\text{AU9999},t} + \varepsilon_t$$
+
+然后扣除权益 beta 得到对冲后序列：
+
+$$r_{\text{对冲后},t} = r_{\text{黄金行业},t} - \hat{\beta}_{\text{权益}} \cdot r_{\text{HS300},t}$$
+
+保留现货金暴露不做对冲。回归系数可在"数据"页签查看。
+
+**数据更新**：展开"手动更新基准数据"框，下载当前 Wind Excel → 在本地用 Wind 插件刷新 → 再上传回来。
+
+### 2. 自定义 ERC Tab
+
+上传 Wind 标准格式的收盘价 Excel（或使用默认示例数据集 `data/自定义ERC-默认数据集.xlsx`），自由选择资产进行 ERC 回测。
+
+**输入格式要求**：Wind 多行表头导出格式，前 4 行为表头（第 3 行为名称、第 4 行为代码），第 5 行起为数据行，必须包含 `Date` 列。
+
+支持选择对比基准资产，自动对齐共同可用区间。
+
+### 3. 两层嵌套 ERC（在自定义 Tab 中选择"嵌套"模式）
+
+两层级联 ERC：
+
+1. **第一层（组内）**：在每个大组内部，对组内资产做 ERC，生成组内收益序列
+2. **第二层（组间）**：以大组收益序列为"资产"，再次做 ERC，生成组间权重分配
+3. **净权重** = 组间权重 × 组内权重，即每项原始资产在组合中的最终暴露
+
+大组可任意定义，同一资产可出现在多个大组。
+
+#### 尾部风险（两层嵌套模式）
+
+支持两种信号计算口径（`key="nested_tail_method"`）：
+- **按全部入选资产（不分组）**：直接对底层资产计算 PC1 + 下行半方差
+- **按大组（每组视为一个资产）**：以大组收益序列作为输入计算信号
+
+### 4. 尾部风险控制（所有 ERC 模式的共有功能）
+
+基于 Final 指标的风险信号系统（`src/risk_control.py`）：
+
+```
+PC1 强度 = PC1_MA30 / PC1_Mean252
+Final 指标 = PC1 强度 × GM63 (下行半方差几何均值)
+Final 强度 = Final 指标 / Final_MA252
 ```
 
-## Deploy
+- **PC1**：资产收益率协方差矩阵第一主成分解释比例（滚动 63 日窗口），衡量市场集中度
+- **下行半方差**：只考虑负收益的半方差，衡量下行风险
+- **分层现金仓位**：Final 强度超过中/高风险阈值时，配置对应比例的现金
 
-Push this folder to GitHub, then create a Streamlit Community Cloud app with `app.py` as the entry file.
+**侧边栏风险参数**可调：PC1 窗口、平滑窗口、历史均值窗口、下行半方差窗口、Final 均线窗口、风险阈值、现金仓位比例。支持一键恢复默认值。
+
+### 5. 指标系统（`src/metrics.py`）
+
+| 指标 | 计算方式 |
+|------|----------|
+| 年化收益 | 净值终值/初值 ^ (年化频次/样本数) - 1 |
+| 年化波动率 | 日收益率标准差 × √252（日频数据自动检测） |
+| 夏普比率 | 超额收益均值 / 收益率标准差 × √年化频次 |
+| 卡玛比率 | 年化收益 / |最大回撤| |
+| 最大回撤 | 净值 / 累计峰值 - 1 的最小值 |
+| 月均换手率 | 日均换手率 × 月均交易日数 |
+| 月/日胜率 | 收益率 > 0 的比例 |
+| 最长回撤修复期 | 从峰值到收复失地的最大天数 |
+
+所有指标按**全样本 / 近 10 年 / 近 5 年 / 近 2 年 / 近 1 年 / 近 6 个月**分段展示，组间最优值自动加粗。
+
+### 6. 报告下载
+
+点击页面右上角"下载原始报告（ZIP）"按钮，打包下载两份 PDF：
+
+- `ERC风险平价组合 - 风险控制策略.pdf` — 原始演示文稿风格报告
+- `风险平价组合策略回测总结报告.pdf` — 回测总结报告
+
+---
+
+## 核心算法
+
+### ERC 权重求解（`src/erc.py`）
+
+```python
+# 最小化各资产风险贡献之间的方差
+min Σ(RC_i - RC̄)²
+约束：Σw_i = 1, w_i > 0
+
+RC_i = w_i × (Σw)_i / σ_p
+```
+
+使用 `scipy.optimize.minimize(method="SLSQP")` 求解。若求解失败则退回到等权重。
+
+### 回测流程
+
+1. 计算资产日收益率（pct_change）
+2. 在每个调仓日，用过去 N 日（默认 60 日）的协方差矩阵求解 ERC 权重
+3. 权重在调仓计算日的次一交易日生效（shift(1)）
+4. 组合收益 = Σ(权重 × 资产收益)
+5. 组合净值 = Π(1 + 组合收益)
+
+### 频率检测（`src/metrics.py:detect_freq`）
+
+自动检测数据频次用于年化计算：
+- 日频（中位间隔 ≤ 2 天）→ 252
+- 周频（≤ 10 天）→ 52
+- 月频 → 12
+
+---
+
+## 调仓逻辑
+
+| 频率 | 说明 |
+|------|------|
+| 日度 | 每个交易日计算并生效 |
+| 周度 | 每周第 N 个交易日计算，次一交易日生效 |
+| 月度 | 每月第 N 个交易日计算，次一交易日生效 |
+
+调仓日期使用 `A股交易日历_2026-2028.xlsx` 推算，无日历时回退到 `pd.bdate_range` 生成。
+
+---
+
+## 如何维护
+
+### 更换基准数据
+
+替换 `data/标准 ERC- 收盘价数据.xlsx`，必须包含以下 Wind 代码：
+
+```
+H20955.CSI  CBA00661.CS  CI005213.WI  H00300.CSI  AU9999.SGE
+```
+
+或在界面上使用"手动更新基准数据"功能上传。
+
+### 更换自定义 ERC 默认数据集
+
+替换 `data/自定义ERC-默认数据集.xlsx`，保持 Wind 标准格式即可。
+
+### 更换交易日历
+
+替换 `data/A股交易日历_2026-2028.xlsx`，需要包含 `date` 列。
+
+### 更换无风险利率数据
+
+替换 `data/无风险利率-1年期国债指数.xlsx`，使用 Wind 标准格式，代码 `CBA00311.CS`。
+
+### 更新报告 PDF
+
+替换 `data/ERC风险平价组合 - 风险控制策略.pdf` 或 `docs/summary_report.pdf`，下载按钮自动读取。
+
+### 侧边栏风险参数默认值
+
+在 `app.py` 的 `risk_defaults` 字典中修改：
+
+```python
+risk_defaults = {
+    "risk_pc1_window": 63,
+    "risk_pc1_ma_window": 30,
+    "risk_pc1_mean_window": 252,
+    "risk_dsv_window": 63,
+    "risk_final_ma_window": 252,
+    "risk_mid_threshold": 1.20,
+    "risk_high_threshold": 1.50,
+    "risk_mid_cash_pct": 25,
+    "risk_high_cash_pct": 50,
+}
+```
+
+### 代码组织原则
+
+- `app.py` 只负责 UI 编排和数据缓存（`@st.cache_data`），业务逻辑在 `src/` 各模块中
+- 指标计算无状态：`calc_metrics` / `build_period_table` 只接受 Series 参数
+- ERC 求解器无副作用：`solve_erc_weights` 纯函数
+- 新增资产/策略只需在 `custom.py` 添加新函数，`app.py` 中注册调用
+
+---
+
+## 已知限制
+
+- 数据格式仅支持 Wind 标准多行表头导出
+- 交易日历只覆盖 2026-2028 年
+- 黄金对冲使用全样本 OLS（非滚动），beta 系数在全区间固定
