@@ -15,6 +15,38 @@ def detect_freq(idx: pd.DatetimeIndex) -> int:
     return 12
 
 
+def compute_rf_rates_per_period(
+    rf_nav: pd.Series,
+    nav_index: pd.DatetimeIndex,
+) -> dict[str, str]:
+    """计算各标准区间的年化无风险收益率，用于 Sharpe 说明文字。"""
+    end_date = nav_index.max()
+    periods = {
+        "全样本": nav_index.min(),
+        "近10年": end_date - pd.DateOffset(years=10),
+        "近5年": end_date - pd.DateOffset(years=5),
+        "近2年": end_date - pd.DateOffset(years=2),
+        "近1年": end_date - pd.DateOffset(years=1),
+        "近6个月": end_date - pd.DateOffset(months=6),
+    }
+    freq = detect_freq(nav_index)
+    rates = {}
+    for label, start in periods.items():
+        mask = nav_index >= start
+        period_idx = nav_index[mask]
+        if len(period_idx) < 2:
+            rates[label] = "NA"
+            continue
+        rf_aligned = rf_nav.reindex(period_idx, method="ffill")
+        n = len(rf_aligned)
+        if rf_aligned.iloc[0] <= 0 or rf_aligned.iloc[-1] <= 0:
+            rates[label] = "NA"
+            continue
+        ann_rf = (rf_aligned.iloc[-1] / rf_aligned.iloc[0]) ** (freq / n) - 1.0
+        rates[label] = f"{ann_rf * 100:.2f}%"
+    return rates
+
+
 def max_dd_info(nav: pd.Series) -> tuple[float, pd.Timestamp, pd.Timestamp]:
     dd = nav / nav.cummax() - 1.0
     end = dd.idxmin()
@@ -53,6 +85,7 @@ def calc_metrics(
     turnover: pd.Series,
     rf_ret: pd.Series | None = None,
     rf_label: str = "未设置(按0处理)",
+    rf_nav: pd.Series | None = None,
 ) -> dict[str, str]:
     nav = nav.dropna()
     if len(nav) < 20:
@@ -60,14 +93,21 @@ def calc_metrics(
 
     freq = detect_freq(nav.index)
     ret = nav.pct_change().dropna()
-    if rf_ret is None:
-        rf_aligned = pd.Series(0.0, index=ret.index)
-    else:
-        rf_aligned = rf_ret.reindex(ret.index).ffill().fillna(0.0)
-    excess_ret = ret - rf_aligned
     ann_ret = (nav.iloc[-1] / nav.iloc[0]) ** (freq / len(nav)) - 1.0
     ann_vol = ret.std() * np.sqrt(freq)
-    sharpe = excess_ret.mean() / ret.std() * np.sqrt(freq) if ret.std() > 0 else np.nan
+
+    # 夏普比率 = (组合年化收益 - 同期无风险年化收益) / 年化波动率
+    if rf_nav is not None:
+        rf_aligned = rf_nav.reindex(nav.index, method="ffill")
+        n = len(rf_aligned)
+        if rf_aligned.iloc[0] > 0 and n >= 2:
+            rf_ann_ret = (rf_aligned.iloc[-1] / rf_aligned.iloc[0]) ** (freq / n) - 1.0
+        else:
+            rf_ann_ret = 0.0
+    else:
+        rf_ann_ret = 0.0
+    sharpe = (ann_ret - rf_ann_ret) / ann_vol if ann_vol > 0 else np.nan
+
     mdd, mdd_start, mdd_end = max_dd_info(nav)
     calmar = ann_ret / abs(mdd) if mdd < 0 else np.nan
     monthly_turn = turnover.reindex(nav.index).resample("ME").sum().mean()
@@ -110,6 +150,7 @@ def build_period_table(
     turnover: pd.Series,
     rf_ret: pd.Series | None = None,
     rf_label: str = "未设置(按0处理)",
+    rf_nav: pd.Series | None = None,
 ) -> pd.DataFrame:
     end_date = nav.index.max()
     periods = {
@@ -123,5 +164,8 @@ def build_period_table(
     rows = {}
     for label, start in periods.items():
         mask = nav.index >= start
-        rows[label] = calc_metrics(nav.loc[mask], turnover.loc[mask], rf_ret=rf_ret, rf_label=rf_label)
+        rows[label] = calc_metrics(
+            nav.loc[mask], turnover.loc[mask],
+            rf_ret=rf_ret, rf_label=rf_label, rf_nav=rf_nav,
+        )
     return pd.DataFrame(rows).T[METRIC_COLUMNS]

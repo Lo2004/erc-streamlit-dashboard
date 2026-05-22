@@ -13,7 +13,7 @@ from src.trading_calendar import load_trading_calendar, next_calendar_rebalance_
 
 
 DATA_PATH = Path("data/标准 ERC- 收盘价数据.xlsx")
-RISK_FREE_PATH = Path("data/无风险利率-1年期国债指数.xlsx")
+RISK_FREE_PATH = Path("data/无风险利率-国债总财富(1-3年)指数.xlsx")
 
 CODE_STOCK = "H20955.CSI"
 CODE_BOND10 = "CBA00661.CS"
@@ -111,7 +111,7 @@ def compute_baseline_from_prices(
     bench_nav = (1.0 + bench_ret).cumprod().rename("60/40基准")
     csi300_nav = (1.0 + csi300_ret).cumprod().rename("沪深300")
     nav_df = pd.concat([result["nav"], bench_nav, csi300_nav], axis=1).dropna()
-    rf_ret, rf_label = load_risk_free_returns(RISK_FREE_PATH)
+    rf_ret, rf_nav, rf_label = load_risk_free_returns(RISK_FREE_PATH)
 
     drawdown_df = nav_df / nav_df.cummax() - 1.0
     turnover_zero = pd.Series(0.0, index=nav_df.index)
@@ -121,10 +121,10 @@ def compute_baseline_from_prices(
                 result["nav"].reindex(nav_df.index),
                 result["turnover"].reindex(nav_df.index),
                 rf_ret=rf_ret,
-                rf_label=rf_label,
+                rf_label=rf_label, rf_nav=rf_nav,
             ),
-            "60/40基准": build_period_table(bench_nav.reindex(nav_df.index), turnover_zero, rf_ret=rf_ret, rf_label=rf_label),
-            "沪深300": build_period_table(csi300_nav.reindex(nav_df.index), turnover_zero, rf_ret=rf_ret, rf_label=rf_label),
+            "60/40基准": build_period_table(bench_nav.reindex(nav_df.index), turnover_zero, rf_ret=rf_ret, rf_label=rf_label, rf_nav=rf_nav),
+            "沪深300": build_period_table(csi300_nav.reindex(nav_df.index), turnover_zero, rf_ret=rf_ret, rf_label=rf_label, rf_nav=rf_nav),
         },
         names=["组合", "区间"],
     )

@@ -16,7 +16,12 @@ from src.custom import (
     run_custom_backtest_with_benchmark,
     run_two_layer_erc,
 )
+from src.metrics import build_period_table, compute_rf_rates_per_period
+from src.data_loader import load_risk_free_returns
+from src.metrics import compute_rf_rates_per_period
 from src.risk_control import run_final_indicator_overlay
+
+_RISK_FREE_PATH = "data/无风险利率-国债总财富(1-3年)指数.xlsx"
 
 import uuid
 
@@ -178,11 +183,15 @@ def render_plain_table(source: pd.DataFrame) -> None:
     st.markdown("".join(html), unsafe_allow_html=True)
 
 
-def render_sharpe_note() -> None:
-    st.caption(
-        "夏普比率口径：使用中债-总财富(1年以下)指数(CBA00311.CS)的日收益率作为无风险收益率，"
-        "按组合/基准日收益率减无风险收益率后的超额收益计算。"
-    )
+def render_sharpe_note(rf_rates: dict[str, str] | None = None) -> None:
+    parts = [
+        "夏普比率口径：使用中债-国债总财富(1-3年)指数(CBA00621.CS)的年化收益率作为无风险收益率，"
+        "按(组合年化收益-区间无风险年化收益)/年化波动率计算。"
+    ]
+    if rf_rates:
+        rate_str = "；".join(f"{k}: {v}" for k, v in rf_rates.items())
+        parts.append(f"各区间无风险年化收益率: {rate_str}")
+    st.caption("  ".join(parts))
 
 
 @st.cache_data(show_spinner=False)
@@ -194,6 +203,12 @@ def cached_compute_baseline(path: str, start_date: str, lookback: int, rebalance
 def cached_compute_baseline_upload(uploaded_file, start_date: str, lookback: int, rebalance: str, rebalance_day: int, cost_bps: float):
     prices, names = load_baseline_data(uploaded_file)
     return compute_baseline_from_prices(prices, names, start_date, lookback, rebalance, rebalance_day, cost_bps=cost_bps)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_rf_nav() -> pd.Series:
+    _, rf_nav, _ = load_risk_free_returns(_RISK_FREE_PATH)
+    return rf_nav
 
 
 @st.cache_data(show_spinner=False)
@@ -401,7 +416,8 @@ def render_tail_risk_panel(signals: pd.DataFrame, exposure: pd.Series, overlay_r
         width="stretch",
     )
     st.subheader("尾部风险核心指标")
-    render_sharpe_note()
+    rf_rates = compute_rf_rates_per_period(_cached_rf_nav(), overlay_result["nav_df"].index)
+    render_sharpe_note(rf_rates=rf_rates)
     render_metric_block("收益与风险", overlay_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
     render_metric_block("回撤", overlay_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
     render_metric_block("交易与胜率", overlay_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
@@ -573,7 +589,8 @@ with page_baseline:
         with tab_overview:
             st.plotly_chart(baseline_dashboard_chart(nav_df, data["drawdown_df"], weights, ASSET_LABELS), width="stretch")
             st.subheader("核心指标")
-            render_sharpe_note()
+            rf_rates = compute_rf_rates_per_period(_cached_rf_nav(), nav_df.index)
+            render_sharpe_note(rf_rates=rf_rates)
             render_metric_block("收益与风险", metrics, ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
             render_metric_block("回撤", metrics, ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
             render_metric_block("交易与胜率", metrics, ["月均换手率", "月胜率", "日胜率"])
@@ -727,7 +744,8 @@ with page_custom:
                     )
 
                     st.subheader("核心指标")
-                    render_sharpe_note()
+                    rf_rates = compute_rf_rates_per_period(_cached_rf_nav(), custom_nav.index)
+                    render_sharpe_note(rf_rates=rf_rates)
                     render_metric_block("收益与风险", custom_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
                     render_metric_block("回撤", custom_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
                     render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
@@ -936,7 +954,8 @@ with page_custom:
                     width="stretch",
                 )
                 st.subheader("核心指标")
-                render_sharpe_note()
+                rf_rates = compute_rf_rates_per_period(_cached_rf_nav(), n_nav.index)
+                render_sharpe_note(rf_rates=rf_rates)
                 render_metric_block("收益与风险", n_metrics, ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
                 render_metric_block("回撤", n_metrics, ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
                 render_metric_block("交易与胜率", n_metrics, ["月均换手率", "月胜率", "日胜率"])
