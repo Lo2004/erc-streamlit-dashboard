@@ -404,15 +404,30 @@ with col_title:
     st.title("ERC 组合看板")
 with col_dl:
     st.markdown("<br>", unsafe_allow_html=True)
-    report_path = Path("data/ERC风险平价组合 - 风险控制策略.pdf")
-    if report_path.exists():
-        st.download_button(
-            "下载原始报告",
-            data=report_path.read_bytes(),
-            file_name=report_path.name,
-            mime="application/pdf",
-            use_container_width=True,
-        )
+
+    @st.cache_data(show_spinner=False)
+    def _build_report_zip() -> bytes:
+        import zipfile, io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            files = [
+                ("data/ERC风险平价组合 - 风险控制策略.pdf", "ERC风险平价组合 - 风险控制策略.pdf"),
+                ("docs/summary_report.pdf", "风险平价组合策略回测总结报告.pdf"),
+            ]
+            for path, arcname in files:
+                p = Path(path)
+                if p.exists():
+                    zf.writestr(arcname, p.read_bytes())
+        return buf.getvalue()
+
+    report_zip = _build_report_zip()
+    st.download_button(
+        "下载原始报告（ZIP）",
+        data=report_zip,
+        file_name="ERC全套报告.zip",
+        mime="application/zip",
+        use_container_width=True,
+    )
 with st.sidebar:
     st.header("参数")
     start_date = st.date_input("回测起点", value=pd.Timestamp("2010-01-01"))
@@ -596,19 +611,11 @@ with page_custom:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     uploaded_file = st.file_uploader("上传 Wind 标准化收盘价 Excel", type=["xlsx", "xls"])
-    local_file_path = st.text_input("或输入本地 Excel 文件路径", value="")
 
     try:
         if uploaded_file is not None:
             custom_prices, custom_names = cached_load_custom(uploaded_file)
             data_label = uploaded_file.name
-        elif local_file_path.strip():
-            local_path = Path(local_file_path.strip()).expanduser()
-            if not local_path.exists():
-                st.error(f"找不到文件：{local_path}")
-                st.stop()
-            custom_prices, custom_names = cached_load_custom(str(local_path))
-            data_label = str(local_path)
         else:
             custom_prices, custom_names = cached_load_custom(str(SAMPLE_CUSTOM_PATH))
             data_label = str(SAMPLE_CUSTOM_PATH)

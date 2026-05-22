@@ -10,7 +10,7 @@ from src.erc import run_erc_backtest
 from src.metrics import build_period_table
 
 
-SAMPLE_CUSTOM_PATH = Path("data/测试拓展资产集.xlsx")
+SAMPLE_CUSTOM_PATH = Path("data/自定义ERC-默认数据集.xlsx")
 RISK_FREE_PATH = Path("data/无风险利率-1年期国债指数.xlsx")
 
 
