@@ -186,7 +186,12 @@ def baseline_dashboard_chart(
     return fig
 
 
-def final_signal_chart(signals: pd.DataFrame, exposure: pd.Series) -> go.Figure:
+def final_signal_chart(
+    signals: pd.DataFrame,
+    exposure: pd.Series,
+    mid_threshold: float = 1.2,
+    high_threshold: float = 1.5,
+) -> go.Figure:
     plot_df = signals.join(exposure.rename("目标总仓位"), how="left")
     fig = make_subplots(
         rows=3,
@@ -234,7 +239,12 @@ def final_signal_chart(signals: pd.DataFrame, exposure: pd.Series) -> go.Figure:
         col=1,
         secondary_y=False,
     )
-    for threshold, color, name in [(1.0, "#7f7f7f", "阈值1.0"), (1.2, "#f97316", "阈值1.2"), (1.5, "#dc2626", "阈值1.5")]:
+    threshold_lines = [
+        (1.0, "#7f7f7f", "强度1.0"),
+        (float(mid_threshold), "#f97316", f"中风险阈值{float(mid_threshold):.2f}"),
+        (float(high_threshold), "#dc2626", f"高风险阈值{float(high_threshold):.2f}"),
+    ]
+    for threshold, color, name in threshold_lines:
         fig.add_hline(y=threshold, line_dash="dash", line_color=color, line_width=1, row=2, col=1)
         fig.add_trace(
             go.Scatter(x=[None], y=[None], name=name, mode="lines", line=dict(color=color, dash="dash")),

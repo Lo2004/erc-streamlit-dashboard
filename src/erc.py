@@ -99,8 +99,7 @@ def compute_erc_weights(
         weights.loc[dt] = w
         prev_w = w
 
-    weights = weights.ffill().fillna(1.0 / returns.shape[1])
-    return weights.shift(1).fillna(weights.iloc[0])
+    return weights.ffill().shift(1)
 
 
 def compute_rebalance_schedule(index: pd.DatetimeIndex, rebalance: str = "M", rebalance_day: int = 1) -> pd.DatetimeIndex:
@@ -127,6 +126,11 @@ def run_erc_backtest(
     weights = compute_erc_weights(returns, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
     rebalance_dates = compute_rebalance_schedule(returns.index, rebalance=rebalance, rebalance_day=rebalance_day)
     rebalance_dates = rebalance_dates[rebalance_dates >= returns.index[min(lookback - 1, len(returns.index) - 1)]]
+    weights = weights.dropna(how="any")
+    if weights.empty:
+        raise ValueError("样本不足以形成首个有效 ERC 权重，请减少回看窗口或延长样本。")
+    returns = returns.reindex(weights.index).dropna(how="any")
+    weights = weights.reindex(returns.index)
     port_ret = (weights * returns).sum(axis=1)
     turnover = (weights.diff().abs().sum(axis=1) / 2.0).fillna(0.0).rename("turnover")
     if cost_bps > 0:

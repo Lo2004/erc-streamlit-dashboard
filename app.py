@@ -379,7 +379,15 @@ def render_tail_risk_panel(signals: pd.DataFrame, exposure: pd.Series, overlay_r
         ]
     ).assign(数值=lambda df: df["数值"].map(lambda x: "NA" if pd.isna(x) else f"{x:.6f}"))
     render_plain_table(factor_latest)
-    st.plotly_chart(final_signal_chart(signals, exposure), width="stretch")
+    st.plotly_chart(
+        final_signal_chart(
+            signals,
+            exposure,
+            mid_threshold=float(st.session_state.risk_mid_threshold),
+            high_threshold=float(st.session_state.risk_high_threshold),
+        ),
+        width="stretch",
+    )
 
     st.subheader("尾部风险增强表现")
     risk_labels = {**asset_labels, "cash": "现金(收益=0)"}
@@ -451,7 +459,6 @@ with st.sidebar:
         st.caption(f"{period_label}第 {rebalance_day} 个交易日计算新权重，次一交易日生效；若当期交易日不足，则使用当期最后一个交易日。")
 
     cost_bps = st.number_input("双边交易成本（bps）", min_value=0, max_value=500, value=0, step=1)
-    st.caption("非 0 时从组合日收益中扣除：成本 × 日换手率。默认 0 不启用。")
 
     with st.expander("尾部风险参数", expanded=False):
         risk_defaults = {

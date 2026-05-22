@@ -210,7 +210,7 @@ def run_two_layer_erc(
             group_navs[gname] = (1.0 + ret.reindex(g_ret_idx)).cumprod()
         else:
             sub_prices = aligned[codes]
-            res = run_erc_backtest(sub_prices, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day, cost_bps=cost_bps)
+            res = run_erc_backtest(sub_prices, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day, cost_bps=0)
             ret = res["returns"]
             g_ret_idx = ret.index.intersection(aligned.index)
             group_returns[gname] = ret.reindex(g_ret_idx)
@@ -226,7 +226,7 @@ def run_two_layer_erc(
         axis=1, join="inner",
     ).dropna()
 
-    layer2 = run_erc_backtest(group_price_panel, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day, cost_bps=cost_bps)
+    layer2 = run_erc_backtest(group_price_panel, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day, cost_bps=0)
     l2_weights = layer2["weights"]
 
     # ── Effective weights: asset-level net weight = layer2_weight * sub_weight ──
@@ -243,7 +243,12 @@ def run_two_layer_erc(
                 effective_weights[code] += l2_weights[gname] * sub_w[code]
 
     # ── Final NAV & benchmark ──
-    final_ret = layer2["returns"].rename("两层ERC")
+    asset_returns = aligned[all_asset_codes].pct_change().reindex(effective_weights.index).dropna(how="any")
+    effective_weights = effective_weights.reindex(asset_returns.index)
+    final_turnover = (effective_weights.diff().abs().sum(axis=1) / 2.0).fillna(0.0).rename("turnover")
+    final_ret = (effective_weights * asset_returns).sum(axis=1).rename("两层ERC")
+    if cost_bps > 0:
+        final_ret = final_ret - (cost_bps / 10000.0) * final_turnover
     final_nav = (1.0 + final_ret).cumprod().rename("两层ERC")
 
     benchmark_ret = aligned[benchmark_code].pct_change().reindex(final_nav.index).fillna(0.0)
@@ -257,7 +262,7 @@ def run_two_layer_erc(
         {
             "两层ERC": build_period_table(
                 final_nav.reindex(nav_df.index),
-                layer2["turnover"].reindex(nav_df.index),
+                final_turnover.reindex(nav_df.index),
                 rf_ret=rf_ret,
                 rf_label=rf_label,
             ),
@@ -281,4 +286,5 @@ def run_two_layer_erc(
         "group_weights": l2_weights,
         "asset_prices": aligned,
         "group_returns": group_returns,
+        "turnover": final_turnover,
     }
