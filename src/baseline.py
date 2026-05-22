@@ -61,9 +61,9 @@ def load_baseline_data(path: str | Path) -> tuple[pd.DataFrame, dict[str, str]]:
     return loaded.prices, loaded.names
 
 
-def compute_baseline(path: str | Path, start_date: str, lookback: int, rebalance: str, rebalance_day: int = 1):
+def compute_baseline(path: str | Path, start_date: str, lookback: int, rebalance: str, rebalance_day: int = 1, cost_bps: float = 0):
     prices, names = load_baseline_data(path)
-    return compute_baseline_from_prices(prices, names, start_date, lookback, rebalance, rebalance_day)
+    return compute_baseline_from_prices(prices, names, start_date, lookback, rebalance, rebalance_day, cost_bps=cost_bps)
 
 
 def compute_baseline_from_prices(
@@ -73,6 +73,7 @@ def compute_baseline_from_prices(
     lookback: int,
     rebalance: str,
     rebalance_day: int = 1,
+    cost_bps: float = 0,
 ):
     prices = prices.loc[prices.index >= pd.Timestamp(start_date)].dropna()
 
@@ -99,6 +100,7 @@ def compute_baseline_from_prices(
         lookback=lookback,
         rebalance=rebalance,
         rebalance_day=rebalance_day,
+        cost_bps=cost_bps,
     )
     rebalance_dates = result["rebalance_dates"]
 

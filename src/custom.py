@@ -52,6 +52,7 @@ def run_custom_backtest(
     rebalance: str,
     rebalance_day: int = 1,
     names: dict[str, str] | None = None,
+    cost_bps: float = 0,
 ):
     if len(selected_codes) < 2:
         raise ValueError("请至少选择 2 个资产。")
@@ -70,7 +71,7 @@ def run_custom_backtest(
     if len(asset_prices) <= lookback + 5:
         raise ValueError("共同样本过短，请减少回看窗口或调整资产/日期。")
 
-    result = run_erc_backtest(asset_prices, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
+    result = run_erc_backtest(asset_prices, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day, cost_bps=cost_bps)
     benchmark_name = (names or {}).get(benchmark_code, benchmark_code)
     benchmark_ret = aligned_prices[benchmark_code].pct_change().reindex(result["returns"].index).fillna(0.0)
     benchmark_nav = (1.0 + benchmark_ret).cumprod().rename(benchmark_name)
@@ -118,6 +119,7 @@ def run_custom_backtest_with_benchmark(
     rebalance: str,
     rebalance_day: int = 1,
     names: dict[str, str] | None = None,
+    cost_bps: float = 0,
 ):
     return run_custom_backtest(
         prices=prices,
@@ -129,6 +131,7 @@ def run_custom_backtest_with_benchmark(
         rebalance=rebalance,
         rebalance_day=rebalance_day,
         names=names,
+        cost_bps=cost_bps,
     )
 
 
@@ -142,6 +145,7 @@ def run_two_layer_erc(
     rebalance: str,
     rebalance_day: int = 1,
     names: dict[str, str] | None = None,
+    cost_bps: float = 0,
 ):
     """
     两层 ERC 回测。
@@ -206,7 +210,7 @@ def run_two_layer_erc(
             group_navs[gname] = (1.0 + ret.reindex(g_ret_idx)).cumprod()
         else:
             sub_prices = aligned[codes]
-            res = run_erc_backtest(sub_prices, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
+            res = run_erc_backtest(sub_prices, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day, cost_bps=cost_bps)
             ret = res["returns"]
             g_ret_idx = ret.index.intersection(aligned.index)
             group_returns[gname] = ret.reindex(g_ret_idx)
@@ -222,7 +226,7 @@ def run_two_layer_erc(
         axis=1, join="inner",
     ).dropna()
 
-    layer2 = run_erc_backtest(group_price_panel, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
+    layer2 = run_erc_backtest(group_price_panel, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day, cost_bps=cost_bps)
     l2_weights = layer2["weights"]
 
     # ── Effective weights: asset-level net weight = layer2_weight * sub_weight ──

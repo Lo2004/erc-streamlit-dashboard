@@ -121,15 +121,18 @@ def run_erc_backtest(
     lookback: int = 60,
     rebalance: str = "M",
     rebalance_day: int = 1,
+    cost_bps: float = 0,
 ) -> dict[str, pd.DataFrame | pd.Series]:
     returns = asset_prices.pct_change().dropna()
     weights = compute_erc_weights(returns, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day)
     rebalance_dates = compute_rebalance_schedule(returns.index, rebalance=rebalance, rebalance_day=rebalance_day)
     rebalance_dates = rebalance_dates[rebalance_dates >= returns.index[min(lookback - 1, len(returns.index) - 1)]]
     port_ret = (weights * returns).sum(axis=1)
+    turnover = (weights.diff().abs().sum(axis=1) / 2.0).fillna(0.0).rename("turnover")
+    if cost_bps > 0:
+        port_ret = port_ret - (cost_bps / 10000.0) * turnover
     nav = (1.0 + port_ret).cumprod().rename("ERC")
     drawdown = (nav / nav.cummax() - 1.0).rename("ERC")
-    turnover = (weights.diff().abs().sum(axis=1) / 2.0).fillna(0.0).rename("turnover")
     return {
         "returns": port_ret,
         "weights": weights,

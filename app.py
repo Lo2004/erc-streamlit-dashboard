@@ -186,14 +186,14 @@ def render_sharpe_note() -> None:
 
 
 @st.cache_data(show_spinner=False)
-def cached_compute_baseline(path: str, start_date: str, lookback: int, rebalance: str, rebalance_day: int):
-    return compute_baseline(path, start_date, lookback, rebalance, rebalance_day)
+def cached_compute_baseline(path: str, start_date: str, lookback: int, rebalance: str, rebalance_day: int, cost_bps: float):
+    return compute_baseline(path, start_date, lookback, rebalance, rebalance_day, cost_bps=cost_bps)
 
 
 @st.cache_data(show_spinner=False)
-def cached_compute_baseline_upload(uploaded_file, start_date: str, lookback: int, rebalance: str, rebalance_day: int):
+def cached_compute_baseline_upload(uploaded_file, start_date: str, lookback: int, rebalance: str, rebalance_day: int, cost_bps: float):
     prices, names = load_baseline_data(uploaded_file)
-    return compute_baseline_from_prices(prices, names, start_date, lookback, rebalance, rebalance_day)
+    return compute_baseline_from_prices(prices, names, start_date, lookback, rebalance, rebalance_day, cost_bps=cost_bps)
 
 
 @st.cache_data(show_spinner=False)
@@ -450,6 +450,9 @@ with st.sidebar:
         )
         st.caption(f"{period_label}第 {rebalance_day} 个交易日计算新权重，次一交易日生效；若当期交易日不足，则使用当期最后一个交易日。")
 
+    cost_bps = st.number_input("双边交易成本（bps）", min_value=0, max_value=500, value=0, step=1)
+    st.caption("非 0 时从组合日收益中扣除：成本 × 日换手率。默认 0 不启用。")
+
     with st.expander("尾部风险参数", expanded=False):
         risk_defaults = {
             "risk_pc1_window": 63,
@@ -505,11 +508,12 @@ with page_baseline:
         st.caption("必须包含 H20955.CSI、CBA00661.CS、CI005213.WI、H00300.CSI、AU9999.SGE。上传文件只在当前会话中使用。")
 
     try:
+        cost_bps_f = float(cost_bps)
         if baseline_upload is not None:
-            data = cached_compute_baseline_upload(baseline_upload, str(start_date), int(lookback), rebalance, int(rebalance_day))
+            data = cached_compute_baseline_upload(baseline_upload, str(start_date), int(lookback), rebalance, int(rebalance_day), cost_bps_f)
             baseline_source_label = baseline_upload.name
         elif DATA_PATH.exists():
-            data = cached_compute_baseline(str(DATA_PATH), str(start_date), int(lookback), rebalance, int(rebalance_day))
+            data = cached_compute_baseline(str(DATA_PATH), str(start_date), int(lookback), rebalance, int(rebalance_day), cost_bps_f)
             baseline_source_label = str(DATA_PATH)
         else:
             raise FileNotFoundError(f"找不到数据文件：{DATA_PATH}")
@@ -681,6 +685,7 @@ with page_custom:
                     rebalance=rebalance,
                     rebalance_day=int(rebalance_day),
                     names=custom_names,
+                    cost_bps=float(cost_bps),
                 )
             except Exception as exc:
                 st.error(f"自定义组合计算失败：{exc}")
@@ -877,6 +882,7 @@ with page_custom:
                     rebalance=rebalance,
                     rebalance_day=int(rebalance_day),
                     names=custom_names,
+                    cost_bps=float(cost_bps),
                 )
                 _cache.benchmark_name = custom_names.get(benchmark_code, benchmark_code)
             except Exception as exc:
