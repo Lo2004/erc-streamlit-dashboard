@@ -79,7 +79,7 @@ def run_custom_backtest(
     nav_df = pd.concat([result["nav"], benchmark_nav], axis=1).dropna()
     drawdown_df = nav_df / nav_df.cummax() - 1.0
     turnover_zero = pd.Series(0.0, index=nav_df.index)
-    rf_ret, rf_nav, rf_label = load_risk_free_returns(RISK_FREE_PATH)
+    rf_ret, rf_label = load_risk_free_returns(RISK_FREE_PATH)
     metrics = pd.concat(
         {
             "自定义ERC": build_period_table(
@@ -87,14 +87,12 @@ def run_custom_backtest(
                 result["turnover"].reindex(nav_df.index),
                 rf_ret=rf_ret,
                 rf_label=rf_label,
-                rf_nav=rf_nav,
             ),
             benchmark_name: build_period_table(
                 benchmark_nav.reindex(nav_df.index),
                 turnover_zero,
                 rf_ret=rf_ret,
                 rf_label=rf_label,
-                rf_nav=rf_nav,
             ),
         },
         names=["组合", "区间"],
@@ -259,7 +257,7 @@ def run_two_layer_erc(
     nav_df = pd.concat([final_nav, benchmark_nav], axis=1).dropna()
     drawdown_df = nav_df / nav_df.cummax() - 1.0
     turnover_zero = pd.Series(0.0, index=nav_df.index)
-    rf_ret, rf_nav, rf_label = load_risk_free_returns(RISK_FREE_PATH)
+    rf_ret, rf_label = load_risk_free_returns(RISK_FREE_PATH)
     metrics = pd.concat(
         {
             "两层ERC": build_period_table(
@@ -267,14 +265,12 @@ def run_two_layer_erc(
                 final_turnover.reindex(nav_df.index),
                 rf_ret=rf_ret,
                 rf_label=rf_label,
-                rf_nav=rf_nav,
             ),
             benchmark_name: build_period_table(
                 benchmark_nav.reindex(nav_df.index),
                 turnover_zero,
                 rf_ret=rf_ret,
                 rf_label=rf_label,
-                rf_nav=rf_nav,
             ),
         },
         names=["组合", "区间"],

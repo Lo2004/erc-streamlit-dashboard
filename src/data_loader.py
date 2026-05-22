@@ -50,74 +50,11 @@ def validate_required_codes(prices: pd.DataFrame, required_codes: list[str]) -> 
 
 def load_risk_free_returns(
     path: str | Path,
-    code: str | None = None,
-) -> tuple[pd.Series, pd.Series, str]:
-    """
-    加载无风险利率数据。兼容两种 Wind 导出格式：
-
-    - 标准多资产格式（names → row 2, codes → row 3, 含 Date 列）
-    - 单资产导出格式（name → row 0, code → row 1, 列名为 日期/收盘价/Date/close）
-
-    Returns (rf_daily_return, rf_nav, rf_label).
-    """
-    raw = pd.read_excel(path, sheet_name=0, header=None)
-    if raw.shape[0] < 5 or raw.shape[1] < 2:
-        raise ValueError("Risk-free rate data file is too small.")
-
-    # ── 不论哪种格式，先从文件头提取真实的指数名称/代码（row 0/1）──
-    header_name = None
-    header_code = None
-    row0 = [str(v) for v in raw.iloc[0].tolist() if pd.notna(v)]
-    row1 = [str(v) for v in raw.iloc[1].tolist() if pd.notna(v)]
-    if len(row0) >= 2 and row0[0] == "nan":
-        header_name = row0[1]
-    elif len(row0) >= 1:
-        header_name = row0[0]
-    if len(row1) >= 2 and row1[0] == "nan":
-        header_code = row1[1]
-    elif len(row1) >= 1:
-        header_code = row1[0]
-
-    # ── 读取数据 ──
-    row3 = [str(v) for v in raw.iloc[3].tolist()]
-    if "Date" in row3:
-        # 标准 Wind 多列格式
-        loaded = load_wind_price_table(path)
-        target_code = code if (code and code in loaded.prices.columns) else loaded.prices.columns[0]
-        nav = loaded.prices[target_code].dropna()
-        rf_label = f"{loaded.names.get(target_code, target_code)}({target_code})"
-    else:
-        # 单资产导出格式
-        data = raw.iloc[4:].copy()
-        data.columns = [str(v) for v in row3]
-
-        if "Date" in data.columns:
-            data = data.rename(columns={"Date": "date"})
-        elif "date" not in data.columns:
-            data = data.rename(columns={data.columns[0]: "date"})
-
-        data["date"] = pd.to_datetime(data["date"], errors="coerce")
-        data = data.dropna(subset=["date"]).drop_duplicates("date").sort_values("date")
-
-        price_col = None
-        for c in data.columns:
-            if c == "date":
-                continue
-            s = pd.to_numeric(data[c], errors="coerce")
-            if s.notna().sum() > 0:
-                price_col = c
-                break
-        if price_col is None:
-            raise ValueError("No price column found in risk-free rate data.")
-
-        data[price_col] = pd.to_numeric(data[price_col], errors="coerce")
-        nav = data.set_index("date")[price_col].dropna()
-        target_code = code or header_code or price_col
-        rf_label = f"{header_name or '无风险利率'}({target_code})"
-
-    # 若 header 提取到了更精确的名称，覆盖标签
-    if header_name and header_code:
-        rf_label = f"{header_name}({header_code})"
-
+    code: str = "CBA00311.CS",
+) -> tuple[pd.Series, str]:
+    loaded = load_wind_price_table(path)
+    validate_required_codes(loaded.prices, [code])
+    nav = loaded.prices[code].dropna()
     rf_ret = nav.pct_change().fillna(0.0).rename("rf_ret")
-    return rf_ret, nav.rename("rf_nav"), rf_label
+    rf_label = f"{loaded.names.get(code, code)}({code})"
+    return rf_ret, rf_label
