@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from html import escape
+import json
 from pathlib import Path
 import uuid
 
@@ -857,7 +858,109 @@ with page_custom:
         detail = "；".join(group_parts) if group_parts else "暂无有效大组"
         return headline, detail
 
+    def _config_validity(cfg: dict) -> tuple[bool, str]:
+        mode = cfg.get("mode", "基础")
+        benchmark_code = cfg.get("benchmark_code", "")
+        if benchmark_code and benchmark_code not in custom_prices.columns:
+            return False, f"基准缺失：{benchmark_code}"
+        if mode == "基础":
+            valid_codes = [c for c in cfg.get("selected_codes", []) if c in custom_prices.columns]
+            if len(valid_codes) < 2:
+                return False, "有效资产少于 2 个"
+            return True, "可恢复"
+        groups = cfg.get("nested_groups", [])
+        valid_groups = [
+            g for g in groups
+            if len([c for c in g.get("assets", []) if c in custom_prices.columns]) > 0
+        ]
+        if len(valid_groups) < 2:
+            return False, "有效大组少于 2 个"
+        return True, "可恢复"
+
     rebalance_labels = {"M": "月度", "W": "周度", "D": "日度"}
+
+    def _dedupe_config_name(name: str, pending: list[dict] | None = None) -> str:
+        base_name = (name or "未命名").strip() or "未命名"
+        existing_names = {c.get("name", "") for c in st.session_state.saved_custom_configs}
+        if pending:
+            existing_names.update(c.get("name", "") for c in pending)
+        final_name = base_name
+        suffix = 2
+        while final_name in existing_names:
+            final_name = f"{base_name} ({suffix})"
+            suffix += 1
+        return final_name
+
+    def _normalize_imported_config(cfg: dict, pending: list[dict]) -> tuple[dict | None, list[str], list[str]]:
+        warnings: list[str] = []
+        errors: list[str] = []
+        if not isinstance(cfg, dict):
+            return None, warnings, ["配置不是 JSON 对象"]
+
+        mode = cfg.get("mode", "基础")
+        if mode not in {"基础", "嵌套"}:
+            errors.append(f"未知模式：{mode}")
+            return None, warnings, errors
+
+        normalized = {
+            "name": _dedupe_config_name(str(cfg.get("name", "未命名")), pending),
+            "mode": mode,
+            "lookback": int(cfg.get("lookback", 60) or 60),
+            "rebalance_label": cfg.get("rebalance_label", "月度"),
+            "rebalance_day": int(cfg.get("rebalance_day", 1) or 1),
+            "cost_bps": int(cfg.get("cost_bps", 0) or 0),
+            "benchmark_code": cfg.get("benchmark_code", ""),
+            "custom_start": str(cfg.get("custom_start", "")),
+            "custom_end": str(cfg.get("custom_end", "")),
+        }
+
+        available_codes = set(custom_prices.columns)
+        benchmark_code = normalized["benchmark_code"]
+        if benchmark_code and benchmark_code not in available_codes:
+            errors.append(f"基准资产缺失：{benchmark_code}")
+
+        if mode == "基础":
+            raw_codes = list(dict.fromkeys(cfg.get("selected_codes", [])))
+            valid_codes = [c for c in raw_codes if c in available_codes]
+            missing_codes = [c for c in raw_codes if c not in available_codes]
+            if missing_codes:
+                warnings.append(f"已移除缺失资产：{', '.join(missing_codes)}")
+            if len(valid_codes) < 2:
+                errors.append("基础模式有效资产少于 2 个")
+            normalized["selected_codes"] = valid_codes
+        else:
+            normalized_groups = []
+            missing_by_group = []
+            for group in cfg.get("nested_groups", []):
+                if not isinstance(group, dict):
+                    continue
+                raw_assets = list(dict.fromkeys(group.get("assets", [])))
+                valid_assets = [c for c in raw_assets if c in available_codes]
+                missing_assets = [c for c in raw_assets if c not in available_codes]
+                if missing_assets:
+                    missing_by_group.append(f"{group.get('name', '未命名')}: {', '.join(missing_assets)}")
+                if valid_assets:
+                    normalized_groups.append(
+                        {
+                            "id": group.get("id") or str(uuid.uuid4()),
+                            "name": group.get("name") or "未命名",
+                            "assets": valid_assets,
+                        }
+                    )
+            if missing_by_group:
+                warnings.append("已移除缺失组内资产：" + "；".join(missing_by_group))
+            if len(normalized_groups) < 2:
+                errors.append("嵌套模式有效大组少于 2 个")
+            normalized["nested_groups"] = normalized_groups
+
+        return normalized, warnings, errors
+
+    if st.session_state.pop("_sc_import_success", None):
+        st.success(st.session_state.pop("_sc_import_success_text", "配置导入成功。"))
+    if st.session_state.get("_sc_import_report"):
+        with st.expander("最近一次导入报告", expanded=False):
+            for line in st.session_state["_sc_import_report"]:
+                st.write(line)
 
     if st.session_state.saved_custom_configs:
         for i, cfg_dict in enumerate(st.session_state.saved_custom_configs):
@@ -869,45 +972,112 @@ with page_custom:
             _bm_code = cfg_dict.get("benchmark_code", "-")
             _bm_label = _asset_label(_bm_code) if _bm_code in custom_prices.columns else _bm_code
             _summary_head, _summary_detail = _config_summary(cfg_dict)
+            _is_valid, _valid_text = _config_validity(cfg_dict)
 
             with st.container(border=True):
-                row1 = st.columns([3, 2, 1])
+                row1 = st.columns([3.2, 2.2, 1])
                 with row1[0]:
                     st.markdown(f"**{cfg_dict['name']}**")
                 with row1[1]:
-                    st.markdown(f"`{_m}`  `{_bm_code}`")
+                    status_badge = "可恢复" if _is_valid else "需处理"
+                    st.markdown(f"`{_m}` `{status_badge}`")
                 with row1[2]:
                     if st.button("×", key=f"sc_del_{i}", use_container_width=True):
                         st.session_state.saved_custom_configs.pop(i)
                         st.rerun()
 
-                st.caption(f"基准：{_bm_label}")
-                st.caption(f"{_summary_head} · 区间 {_date_text(cfg_dict)} · 回看{_lb}日 · {_rb}调仓 · 成本{_cost}bps")
+                st.caption(f"基准：{_bm_label} · {_summary_head}")
+                st.caption(f"区间 {_date_text(cfg_dict)} · 回看{_lb}日 · {_rb}调仓 · 成本{_cost}bps")
                 if _summary_detail:
                     st.text(_summary_detail)
+                if not _is_valid:
+                    st.warning(_valid_text)
 
-                if st.button("恢复此配置", key=f"sc_load_{i}", use_container_width=True):
+                if st.button("恢复此配置", key=f"sc_load_{i}", use_container_width=True, disabled=not _is_valid):
                     st.session_state.erc_mode = cfg_dict.get("mode", "基础")
                     st.session_state._sc_custom_restore = copy.deepcopy(cfg_dict)
                     st.session_state._sc_pending_restore = copy.deepcopy(cfg_dict)
                     st.rerun()
     else:
         st.caption("暂无已保存配置。")
-    if st.button("+ 保存当前配置", use_container_width=True, key="sc_save_btn"):
-        st.session_state._show_save_dialog = True
-    if st.session_state.get("_show_save_dialog"):
-        default_name = f"组合-{len(st.session_state.saved_custom_configs) + 1}"
-        save_name = st.text_input("配置名称", value=default_name, key="sc_save_name")
-        c_ok, c_cancel = st.columns([1, 1])
-        with c_ok:
-            if st.button("确认保存", key="sc_save_confirm"):
-                if save_name.strip():
-                    cfg = _capture_config(save_name.strip())
-                    st.session_state.saved_custom_configs.append(cfg)
+
+    st.markdown("##### 配置文件")
+    col_actions, col_import = st.columns([1.35, 1])
+    with col_actions:
+        action_cols = st.columns([1, 1])
+        with action_cols[0]:
+            if st.button("+ 保存当前配置", use_container_width=True, key="sc_save_btn"):
+                st.session_state._show_save_dialog = True
+        with action_cols[1]:
+            if st.session_state.saved_custom_configs:
+                json_str = json.dumps(
+                    {"version": 1, "configs": st.session_state.saved_custom_configs},
+                    ensure_ascii=False, indent=2,
+                )
+                st.download_button(
+                    "导出配置", data=json_str, file_name="erc_configs.json",
+                    mime="application/json", use_container_width=True,
+                )
+            else:
+                st.button("导出配置", use_container_width=True, disabled=True, key="sc_export_disabled")
+        if st.session_state.get("_show_save_dialog"):
+            default_name = f"组合-{len(st.session_state.saved_custom_configs) + 1}"
+            save_name = st.text_input("配置名称", value=default_name, key="sc_save_name")
+            c_ok, c_cancel = st.columns([1, 1])
+            with c_ok:
+                if st.button("确认保存", key="sc_save_confirm"):
+                    if save_name.strip():
+                        cfg = _capture_config(save_name.strip())
+                        st.session_state.saved_custom_configs.append(cfg)
+                        st.session_state._show_save_dialog = False
+                        st.rerun()
+            with c_cancel:
+                if st.button("取消", key="sc_save_cancel"):
                     st.session_state._show_save_dialog = False
-        with c_cancel:
-            if st.button("取消", key="sc_save_cancel"):
-                st.session_state._show_save_dialog = False
+                    st.rerun()
+    with col_import:
+        uploaded_json = st.file_uploader(
+            "导入配置 JSON", type=["json"], key="sc_import_json",
+            label_visibility="visible",
+        )
+        if uploaded_json is not None:
+            file_bytes = uploaded_json.getvalue()
+            file_sig = (uploaded_json.name, len(file_bytes), hash(file_bytes))
+            try:
+                raw = json.loads(file_bytes.decode("utf-8-sig"))
+                imp_configs = raw.get("configs", []) if isinstance(raw, dict) else raw
+            except Exception as exc:
+                st.error(f"JSON 解析失败：{exc}")
+                imp_configs = []
+
+            if imp_configs and st.session_state.get("_sc_last_import_sig") != file_sig:
+                valid_configs: list[dict] = []
+                report_lines: list[str] = []
+
+                for cfg in imp_configs:
+                    normalized, warnings, errors = _normalize_imported_config(cfg, valid_configs)
+                    source_name = cfg.get("name", "未命名") if isinstance(cfg, dict) else "非法配置"
+                    if errors:
+                        report_lines.append(f"跳过 {source_name}：" + "；".join(errors))
+                    else:
+                        valid_configs.append(normalized)
+                        if warnings:
+                            report_lines.append(f"导入 {normalized['name']}，但已调整：" + "；".join(warnings))
+                        else:
+                            report_lines.append(f"导入 {normalized['name']}：完整匹配当前数据")
+
+                if valid_configs:
+                    st.session_state.saved_custom_configs.extend(valid_configs)
+                    st.session_state["_sc_import_success"] = True
+                    st.session_state["_sc_import_success_text"] = f"成功导入 {len(valid_configs)} 个配置。"
+                else:
+                    st.session_state["_sc_import_success"] = False
+                st.session_state["_sc_import_report"] = report_lines
+                st.session_state["_sc_last_import_sig"] = file_sig
+                if valid_configs or report_lines:
+                    st.rerun()
+            elif imp_configs:
+                st.caption("该 JSON 已导入。如需重导，请先移除上传文件。")
     st.markdown("---")
 
     # ── Mode toggle ──

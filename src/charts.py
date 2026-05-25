@@ -400,11 +400,12 @@ def yearly_return_bar_chart(yearly_df: pd.DataFrame) -> go.Figure:
                 name=col,
                 x=years,
                 y=values,
+                customdata=[[f"{v:+.2f}%"] for v in values],
                 marker=dict(
                     color=[_adjust_opacity(color, 0.45) if p else color for p in partial],
                     line=dict(width=0),
                 ),
-                hovertemplate=f"%{{y:+.2f}}%<extra>{col}</extra>",
+                hovertemplate=f"{col}: %{{customdata[0]}}<extra></extra>",
             )
         )
 
