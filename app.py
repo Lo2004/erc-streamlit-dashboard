@@ -9,7 +9,8 @@ import pandas as pd
 import streamlit as st
 
 from src.baseline import ASSET_LABELS, DATA_PATH, compute_baseline, compute_baseline_from_prices, load_baseline_data
-from src.charts import baseline_dashboard_chart, final_signal_chart, hierarchical_weights_chart
+from src.charts import baseline_dashboard_chart, final_signal_chart, hierarchical_weights_chart, yearly_return_bar_chart
+from src.metrics import compute_rf_rates_per_period, compute_yearly_returns, build_yearly_return_table
 from src.custom import (
     SAMPLE_CUSTOM_PATH,
     available_window,
@@ -19,7 +20,6 @@ from src.custom import (
     run_two_layer_erc,
 )
 from src.data_loader import extract_rf_from_prices, load_wind_price_table
-from src.metrics import compute_rf_rates_per_period
 from src.risk_control import run_final_indicator_overlay
 
 
@@ -178,6 +178,34 @@ def render_plain_table(source: pd.DataFrame) -> None:
         html.append("<tr>" + "".join(cells) + "</tr>")
     html.append("</table>")
     st.markdown("".join(html), unsafe_allow_html=True)
+
+
+def render_yearly_return_table(yearly_df: pd.DataFrame) -> None:
+    """渲染带条件格式的年度收益明细表 — 超额收益绿涨红跌。"""
+    raw = build_yearly_return_table(yearly_df)
+    excess_cols = [c for c in raw.columns if c.startswith("α vs ")]
+    num_cols = [c for c in raw.columns if c != "年份" and c not in excess_cols]
+
+    def _color_excess(v):
+        if v is None or pd.isna(v):
+            return ""
+        if v > 0:
+            return "background-color: #fef2f2; color: #991b1b"
+        return "background-color: #ecfdf5; color: #065f46"
+
+    styled = raw.style.format(
+        {**{c: "{:+.2f}%" for c in num_cols}, **{c: "{:+.2f}%" for c in excess_cols}},
+        na_rep="—",
+    )
+    if excess_cols:
+        styled = styled.map(_color_excess, subset=excess_cols)
+    styled = styled.set_table_styles(
+        [
+            dict(selector="th", props=[("background", "#f6f7f9"), ("color", "#4b5563"), ("font-weight", "600"), ("text-align", "center"), ("padding", "6px 10px"), ("border", "1px solid #e5e7eb"), ("white-space", "nowrap")]),
+            dict(selector="td", props=[("padding", "6px 10px"), ("border", "1px solid #edf0f2"), ("text-align", "center"), ("white-space", "nowrap"), ("font-size", "14px")]),
+        ]
+    ).set_table_attributes("width: 100%")
+    st.dataframe(styled.hide(), use_container_width=True)
 
 
 def render_sharpe_note(rf_rates: dict[str, str] | None = None) -> None:
@@ -621,6 +649,11 @@ with page_baseline:
 
         with tab_overview:
             st.plotly_chart(baseline_dashboard_chart(nav_df, data["drawdown_df"], weights, ASSET_LABELS), width="stretch")
+            st.subheader("年度收益对比")
+            _yr_df = compute_yearly_returns(nav_df)
+            st.plotly_chart(yearly_return_bar_chart(_yr_df), width="stretch")
+            st.caption("年度收益明细")
+            render_yearly_return_table(_yr_df)
             st.subheader("核心指标")
             rf_rates = compute_rf_rates_per_period(_cached_rf_nav(), nav_df.index)
             render_sharpe_note(rf_rates=rf_rates)
@@ -965,6 +998,12 @@ with page_custom:
                         width="stretch",
                     )
 
+                    st.subheader("年度收益对比")
+                    _yr_df = compute_yearly_returns(custom_nav)
+                    st.plotly_chart(yearly_return_bar_chart(_yr_df), width="stretch")
+                    st.caption("年度收益明细")
+                    render_yearly_return_table(_yr_df)
+
                     st.subheader("核心指标")
                     rf_rates = compute_rf_rates_per_period(_cached_rf_nav(), custom_nav.index)
                     render_sharpe_note(rf_rates=rf_rates)
@@ -1043,6 +1082,12 @@ with page_custom:
                         ),
                         width="stretch",
                     )
+
+                    st.subheader("年度收益对比")
+                    _yr_df = compute_yearly_returns(custom_nav)
+                    st.plotly_chart(yearly_return_bar_chart(_yr_df), width="stretch")
+                    st.caption("年度收益明细")
+                    render_yearly_return_table(_yr_df)
 
                     st.subheader("核心指标")
                     rf_rates = compute_rf_rates_per_period(_cached_rf_nav(), custom_nav.index)
@@ -1260,6 +1305,11 @@ with page_custom:
                     baseline_dashboard_chart(n_nav, n_dd, n_eff_w, n_labels),
                     width="stretch",
                 )
+                st.subheader("年度收益对比")
+                _yr_df = compute_yearly_returns(n_nav)
+                st.plotly_chart(yearly_return_bar_chart(_yr_df), width="stretch")
+                st.caption("年度收益明细")
+                render_yearly_return_table(_yr_df)
                 st.subheader("核心指标")
                 rf_rates = compute_rf_rates_per_period(_cached_rf_nav(), n_nav.index)
                 render_sharpe_note(rf_rates=rf_rates)

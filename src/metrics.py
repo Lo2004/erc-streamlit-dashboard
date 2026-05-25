@@ -169,3 +169,46 @@ def build_period_table(
             rf_ret=rf_ret, rf_label=rf_label, rf_nav=rf_nav,
         )
     return pd.DataFrame(rows).T[METRIC_COLUMNS]
+
+
+def compute_yearly_returns(nav_df: pd.DataFrame) -> pd.DataFrame:
+    """将每日净值 DataFrame 转换为日历年收益百分比。
+
+    首年若非1月起始、末年若非12月结束，标记为部分年份。
+    """
+    yearly = nav_df.resample("YE").last().pct_change().dropna(how="all") * 100
+    yearly.index = yearly.index.year
+    yearly.index.name = "年份"
+
+    partial_mask = pd.Series(False, index=yearly.index)
+    first_year = nav_df.index.min().year
+    last_year = nav_df.index.max().year
+    if nav_df.index.min().month > 1:
+        partial_mask.loc[first_year] = True
+    if nav_df.index.max().month < 12:
+        partial_mask.loc[last_year] = True
+    yearly = yearly.copy()
+    yearly.insert(0, "_partial", partial_mask.astype(bool))
+    return yearly
+
+
+def build_yearly_return_table(yearly_df: pd.DataFrame) -> pd.DataFrame:
+    """构建年度收益展示表，返回数值便于上层做条件格式。"""
+    cols = [c for c in yearly_df.columns if c != "_partial"]
+    rows = []
+    for year, row in yearly_df.iterrows():
+        entry: dict[str, float | object] = {"年份": str(year)}
+        if row.get("_partial"):
+            entry["年份"] = f"{year} *"
+        port_col = cols[0]
+        entry[port_col] = row[port_col] if pd.notna(row[port_col]) else None
+        for bc in cols[1:]:
+            entry[bc] = row[bc] if pd.notna(row[bc]) else None
+            port_val = row[port_col]
+            bv = row[bc]
+            if pd.notna(port_val) and pd.notna(bv):
+                entry[f"α vs {bc}"] = round(float(port_val - bv), 2)
+            else:
+                entry[f"α vs {bc}"] = None
+        rows.append(entry)
+    return pd.DataFrame(rows)

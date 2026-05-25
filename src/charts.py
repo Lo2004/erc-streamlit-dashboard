@@ -372,3 +372,92 @@ def _find_group_for_code(code: str, group_assignments: dict[str, list[str]]) -> 
         if code in codes:
             return gname
     return None
+
+
+_PORTFOLIO_COLOR = "#2563eb"  # vibrant blue — portfolio
+_BENCHMARK_COLORS = ["#555555", "#888888", "#aaaaaa", "#cccccc", "#dddddd"]  # grayscale — benchmarks
+
+
+def yearly_return_bar_chart(yearly_df: pd.DataFrame) -> go.Figure:
+    """分组柱状图：日历年组合 vs 基准收益对比。"""
+    cols = [c for c in yearly_df.columns if c != "_partial"]
+    years = yearly_df.index.astype(str).tolist()
+    partial = yearly_df["_partial"].tolist() if "_partial" in yearly_df.columns else [False] * len(years)
+
+    fig = go.Figure()
+
+    portfolio_col = cols[0]
+    benchmark_cols = cols[1:]
+
+    for j, col in enumerate(benchmark_cols + [portfolio_col]):
+        values = yearly_df[col].tolist()
+        if col == portfolio_col:
+            color = _PORTFOLIO_COLOR  # portfolio = vibrant
+        else:
+            color = _BENCHMARK_COLORS[(j - 1) % len(_BENCHMARK_COLORS)]  # benchmarks = grayscale
+        fig.add_trace(
+            go.Bar(
+                name=col,
+                x=years,
+                y=values,
+                marker=dict(
+                    color=[_adjust_opacity(color, 0.45) if p else color for p in partial],
+                    line=dict(width=0),
+                ),
+                hovertemplate=f"%{{y:+.2f}}%<extra>{col}</extra>",
+            )
+        )
+
+    fig.update_layout(
+        title="年度收益对比",
+        template="plotly_white",
+        height=400,
+        hovermode="x unified",
+        barmode="group",
+        bargap=0.18,
+        bargroupgap=0.10,
+        yaxis=dict(
+            title="收益 (%)",
+            zeroline=True,
+            zerolinecolor="#e5e7eb",
+            zerolinewidth=1,
+            gridcolor="#f3f4f6",
+            ticksuffix="%",
+            tickformat=".1f",
+        ),
+        xaxis=dict(
+            type="category",
+            gridcolor="#f3f4f6",
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font_size=12,
+        ),
+        margin=dict(l=20, r=20, t=60, b=20),
+    )
+
+    if any(partial):
+        fig.add_annotation(
+            x=1.0,
+            y=1.0,
+            xref="paper",
+            yref="paper",
+            xanchor="right",
+            yanchor="bottom",
+            text="* 底色较浅的年份为部分年份",
+            showarrow=False,
+            font=dict(size=10, color="#9ca3af"),
+        )
+
+    return fig
+
+
+def _adjust_opacity(hex_color: str, opacity: float) -> str:
+    """将 #RRGGBB hex 转为 rgba 字符串。"""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{opacity})"
