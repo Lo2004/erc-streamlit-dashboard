@@ -123,3 +123,20 @@ def load_risk_free_returns(
 
     rf_ret = nav.pct_change().fillna(0.0).rename("rf_ret")
     return rf_ret, nav.rename("rf_nav"), rf_label
+
+
+RF_CODE = "CBA00621.CS"
+
+
+def extract_rf_from_prices(
+    prices: pd.DataFrame,
+    names: dict[str, str] | None = None,
+) -> tuple[pd.Series, pd.Series, str]:
+    """从合并价格 DataFrame 中提取无风险利率列。"""
+    if RF_CODE not in prices.columns:
+        raise ValueError(f"价格数据中缺少无风险利率列: {RF_CODE}")
+    nav = prices[RF_CODE].dropna()
+    name = (names or {}).get(RF_CODE, RF_CODE)
+    rf_label = f"{name}({RF_CODE})"
+    rf_ret = nav.pct_change().fillna(0.0).rename("rf_ret")
+    return rf_ret, nav.rename("rf_nav"), rf_label

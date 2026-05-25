@@ -3,11 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src.data_loader import load_risk_free_returns
 from src.erc import compute_rebalance_schedule
 from src.metrics import build_period_table
-
-RISK_FREE_PATH = "data/无风险利率-国债总财富(1-3年)指数.xlsx"
 
 def rolling_pc1_cov_explained(returns: pd.DataFrame, window: int = 63) -> pd.Series:
     out = pd.Series(np.nan, index=returns.index, name=f"pc1_{window}")
@@ -118,6 +115,9 @@ def _build_overlay_result(
     signals: pd.DataFrame,
     exposure: pd.Series,
     signal_schedule: pd.DatetimeIndex,
+    rf_ret: pd.Series,
+    rf_nav: pd.Series,
+    rf_label: str,
     benchmark_name: str = "沪深300",
 ) -> dict[str, pd.DataFrame | pd.Series | pd.Timestamp]:
     exposure_lag = exposure.shift(1).fillna(exposure.iloc[0])
@@ -133,7 +133,6 @@ def _build_overlay_result(
     turnover_erc = (erc_weights.diff().abs().sum(axis=1) / 2.0).reindex(nav_df.index).fillna(0.0)
     turnover_risk = (risk_weights.diff().abs().sum(axis=1) / 2.0).reindex(nav_df.index).fillna(0.0)
     turnover_zero = pd.Series(0.0, index=nav_df.index)
-    rf_ret, rf_nav, rf_label = load_risk_free_returns(RISK_FREE_PATH)
 
     metrics = pd.concat(
         {
@@ -166,6 +165,9 @@ def run_final_indicator_overlay(
     erc_weights: pd.DataFrame,
     erc_nav: pd.Series,
     benchmark_returns: pd.Series,
+    rf_ret: pd.Series,
+    rf_nav: pd.Series,
+    rf_label: str,
     rebalance: str = "M",
     rebalance_day: int = 1,
     benchmark_name: str = "沪深300",
@@ -213,5 +215,8 @@ def run_final_indicator_overlay(
         signals=signals,
         exposure=exposure,
         signal_schedule=signal_schedule,
+        rf_ret=rf_ret,
+        rf_nav=rf_nav,
+        rf_label=rf_label,
         benchmark_name=benchmark_name,
     )

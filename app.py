@@ -16,12 +16,9 @@ from src.custom import (
     run_custom_backtest_with_benchmark,
     run_two_layer_erc,
 )
-from src.metrics import build_period_table, compute_rf_rates_per_period
-from src.data_loader import load_risk_free_returns
+from src.data_loader import extract_rf_from_prices, load_wind_price_table
 from src.metrics import compute_rf_rates_per_period
 from src.risk_control import run_final_indicator_overlay
-
-_RISK_FREE_PATH = "data/无风险利率-国债总财富(1-3年)指数.xlsx"
 
 import uuid
 
@@ -206,9 +203,13 @@ def cached_compute_baseline_upload(uploaded_file, start_date: str, lookback: int
 
 
 @st.cache_data(show_spinner=False)
+def _cached_rf() -> tuple[pd.Series, pd.Series, str]:
+    loaded = load_wind_price_table(str(DATA_PATH))
+    return extract_rf_from_prices(loaded.prices, loaded.names)
+
+
 def _cached_rf_nav() -> pd.Series:
-    _, rf_nav, _ = load_risk_free_returns(_RISK_FREE_PATH)
-    return rf_nav
+    return _cached_rf()[1]
 
 
 @st.cache_data(show_spinner=False)
@@ -233,6 +234,9 @@ def cached_final_risk_control(
     high_threshold: float,
     mid_cash: float,
     high_cash: float,
+    rf_ret: pd.Series,
+    rf_nav: pd.Series,
+    rf_label: str,
 ):
     asset_returns = panel[["stock", "bond10", "gold_hedged"]].pct_change().dropna()
     csi300_returns = panel["csi300"].pct_change().reindex(asset_returns.index).fillna(0.0)
@@ -241,6 +245,9 @@ def cached_final_risk_control(
         erc_weights=weights,
         erc_nav=erc_nav,
         benchmark_returns=csi300_returns,
+        rf_ret=rf_ret,
+        rf_nav=rf_nav,
+        rf_label=rf_label,
         rebalance=rebalance,
         rebalance_day=rebalance_day,
         pc1_window=pc1_window,
@@ -272,6 +279,9 @@ def cached_nested_risk_control(
     high_threshold: float,
     mid_cash: float,
     high_cash: float,
+    rf_ret: pd.Series,
+    rf_nav: pd.Series,
+    rf_label: str,
     benchmark_name: str = "沪深300",
 ):
     return run_final_indicator_overlay(
@@ -279,6 +289,9 @@ def cached_nested_risk_control(
         erc_weights=erc_weights,
         erc_nav=erc_nav,
         benchmark_returns=benchmark_returns,
+        rf_ret=rf_ret,
+        rf_nav=rf_nav,
+        rf_label=rf_label,
         rebalance=rebalance,
         rebalance_day=rebalance_day,
         benchmark_name=benchmark_name,
@@ -314,6 +327,9 @@ def cached_custom_final_risk_control(
     high_threshold: float,
     mid_cash: float,
     high_cash: float,
+    rf_ret: pd.Series,
+    rf_nav: pd.Series,
+    rf_label: str,
 ):
     asset_returns = asset_prices.pct_change().dropna()
     benchmark_returns = benchmark_prices.pct_change().reindex(asset_returns.index).fillna(0.0).squeeze()
@@ -327,6 +343,9 @@ def cached_custom_final_risk_control(
         erc_weights=weights,
         erc_nav=erc_nav,
         benchmark_returns=benchmark_returns,
+        rf_ret=rf_ret,
+        rf_nav=rf_nav,
+        rf_label=rf_label,
         rebalance=rebalance,
         rebalance_day=rebalance_day,
         pc1_window=pc1_window,
@@ -513,7 +532,7 @@ with page_baseline:
     st.subheader("基准 ERC")
     update_box = st.expander("手动更新基准数据", expanded=False)
     with update_box:
-        st.write("下载当前 Wind 模板，在本地用安装 Wind 插件的 Excel 打开并刷新数据，再把刷新后的 Excel 上传回来。")
+        st.write("下载当前 Wind 模板，在本地用安装 Wind 插件的 Excel 打开并刷新数据，再把刷新后的 Excel 上传回来。文件同时包含基准 ERC 资产和 CBA00621.CS 无风险利率数据。")
         if DATA_PATH.exists():
             st.download_button(
                 "下载当前基准 Wind Excel",
@@ -528,7 +547,7 @@ with page_baseline:
             type=["xlsx", "xls"],
             key="baseline_update_file",
         )
-        st.caption("必须包含 H20955.CSI、CBA00661.CS、CI005213.WI、H00300.CSI、AU9999.SGE。上传文件只在当前会话中使用。")
+        st.caption("必须包含 H20955.CSI、CBA00661.CS、CI005213.WI、H00300.CSI、AU9999.SGE、CBA00621.CS。上传文件只在当前会话中使用。")
 
     try:
         cost_bps_f = float(cost_bps)
@@ -597,6 +616,7 @@ with page_baseline:
 
         with tab_tail_risk:
             try:
+                rf_ret, rf_nav, rf_label = _cached_rf()
                 final_risk_data = cached_final_risk_control(
                     data["panel"],
                     weights,
@@ -612,6 +632,9 @@ with page_baseline:
                     float(high_threshold),
                     float(mid_cash_pct) / 100.0,
                     float(high_cash_pct) / 100.0,
+                    rf_ret,
+                    rf_nav,
+                    rf_label,
                 )
             except Exception as exc:
                 st.error(f"尾部风险计算失败：{exc}")
@@ -687,7 +710,7 @@ with page_custom:
         )
 
         if len(selected_codes) >= 2:
-            common_start, common_end = available_window(custom_prices, list(dict.fromkeys(selected_codes + [benchmark_code])))
+            common_start, common_end = available_window(custom_prices, selected_codes)
             st.info(f"所选资产共同可用区间：{common_start.strftime('%Y-%m-%d')} 至 {common_end.strftime('%Y-%m-%d')}")
             custom_col1, custom_col2, custom_col3 = st.columns([1, 1, 1])
             custom_start = custom_col1.date_input("自定义回测起点", value=common_start, min_value=common_start, max_value=common_end)
@@ -774,6 +797,7 @@ with page_custom:
                             float(high_threshold),
                             float(mid_cash_pct) / 100.0,
                             float(high_cash_pct) / 100.0,
+                            *_cached_rf(),
                         )
                     except Exception as exc:
                         st.error(f"尾部风险计算失败：{exc}")
@@ -981,8 +1005,8 @@ with page_custom:
                 )
 
                 # Build common tail-risk inputs
-                bm_ret_all = nested_result["asset_prices"][benchmark_code].pct_change()
                 erc_nav_s = n_nav["两层ERC"]
+                bm_ret_all = custom_prices[benchmark_code].reindex(erc_nav_s.index).pct_change().fillna(0.0)
 
                 if tail_method == "按全部入选资产（不分组）":
                     asset_codes_for_tail = list(n_eff_w.columns)
@@ -1000,6 +1024,7 @@ with page_custom:
                     tail_labels = {g: g for g in nested_result["group_names"]}
 
                 try:
+                    rf_ret_all, rf_nav_all, rf_label_all = _cached_rf()
                     nested_tail = cached_nested_risk_control(
                         asset_returns=tail_returns,
                         erc_weights=tail_weights,
@@ -1016,6 +1041,9 @@ with page_custom:
                         high_threshold=float(high_threshold),
                         mid_cash=float(mid_cash_pct) / 100.0,
                         high_cash=float(high_cash_pct) / 100.0,
+                        rf_ret=rf_ret_all,
+                        rf_nav=rf_nav_all,
+                        rf_label=rf_label_all,
                         benchmark_name=benchmark_name,
                     )
                 except Exception as exc:

@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.data_loader import load_wind_price_table, validate_required_codes
-from src.data_loader import load_risk_free_returns
+from src.data_loader import RF_CODE, extract_rf_from_prices
 from src.erc import compute_rebalance_schedule
 from src.erc import hedge_gold_series, run_erc_backtest
 from src.metrics import build_period_table
@@ -13,7 +13,6 @@ from src.trading_calendar import load_trading_calendar, next_calendar_rebalance_
 
 
 DATA_PATH = Path("data/标准 ERC- 收盘价数据.xlsx")
-RISK_FREE_PATH = Path("data/无风险利率-国债总财富(1-3年)指数.xlsx")
 
 CODE_STOCK = "H20955.CSI"
 CODE_BOND10 = "CBA00661.CS"
@@ -56,7 +55,7 @@ def estimate_next_rebalance_date(last_date: pd.Timestamp, rebalance: str, rebala
 
 def load_baseline_data(path: str | Path) -> tuple[pd.DataFrame, dict[str, str]]:
     loaded = load_wind_price_table(path)
-    required = [CODE_STOCK, CODE_BOND10, CODE_GOLD, CODE_CSI300, CODE_AU9999]
+    required = [CODE_STOCK, CODE_BOND10, CODE_GOLD, CODE_CSI300, CODE_AU9999, RF_CODE]
     validate_required_codes(loaded.prices, required)
     return loaded.prices, loaded.names
 
@@ -76,6 +75,8 @@ def compute_baseline_from_prices(
     cost_bps: float = 0,
 ):
     prices = prices.loc[prices.index >= pd.Timestamp(start_date)].dropna()
+
+    rf_ret, rf_nav, rf_label = extract_rf_from_prices(prices, names)
 
     gold_hedged, hedge_stats = hedge_gold_series(
         prices,
@@ -111,7 +112,6 @@ def compute_baseline_from_prices(
     bench_nav = (1.0 + bench_ret).cumprod().rename("60/40基准")
     csi300_nav = (1.0 + csi300_ret).cumprod().rename("沪深300")
     nav_df = pd.concat([result["nav"], bench_nav, csi300_nav], axis=1).dropna()
-    rf_ret, rf_nav, rf_label = load_risk_free_returns(RISK_FREE_PATH)
 
     drawdown_df = nav_df / nav_df.cummax() - 1.0
     turnover_zero = pd.Series(0.0, index=nav_df.index)

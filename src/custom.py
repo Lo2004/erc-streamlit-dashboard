@@ -5,13 +5,19 @@ from pathlib import Path
 import pandas as pd
 
 from src.data_loader import WindPriceData, load_wind_price_table
-from src.data_loader import load_risk_free_returns
+from src.data_loader import extract_rf_from_prices
 from src.erc import run_erc_backtest
 from src.metrics import build_period_table
 
 
 SAMPLE_CUSTOM_PATH = Path("data/自定义ERC-默认数据集.xlsx")
-RISK_FREE_PATH = Path("data/无风险利率-国债总财富(1-3年)指数.xlsx")
+_BASELINE_PATH = Path("data/标准 ERC- 收盘价数据.xlsx")
+
+
+def _load_default_rf() -> tuple[pd.Series, pd.Series, str]:
+    """从合并基准文件中加载无风险利率数据。"""
+    loaded = load_wind_price_table(_BASELINE_PATH)
+    return extract_rf_from_prices(loaded.prices, loaded.names)
 
 
 def load_custom_price_data(source) -> WindPriceData:
@@ -59,27 +65,25 @@ def run_custom_backtest(
     if benchmark_code not in prices.columns:
         raise ValueError("基准资产不在上传数据中。")
 
-    common_start, common_end = available_window(prices, list(dict.fromkeys(selected_codes + [benchmark_code])))
+    common_start, common_end = available_window(prices, selected_codes)
     start = max(pd.Timestamp(start_date), common_start)
     end = min(pd.Timestamp(end_date), common_end)
     if start >= end:
         raise ValueError("所选资产在当前回测区间没有足够的共同数据。")
 
-    required_codes = list(dict.fromkeys(selected_codes + [benchmark_code]))
-    aligned_prices = prices.loc[start:end, required_codes].dropna(how="any")
-    asset_prices = aligned_prices[selected_codes]
+    asset_prices = prices.loc[start:end, selected_codes].dropna(how="any")
     if len(asset_prices) <= lookback + 5:
         raise ValueError("共同样本过短，请减少回看窗口或调整资产/日期。")
 
     result = run_erc_backtest(asset_prices, lookback=lookback, rebalance=rebalance, rebalance_day=rebalance_day, cost_bps=cost_bps)
     benchmark_name = (names or {}).get(benchmark_code, benchmark_code)
-    benchmark_ret = aligned_prices[benchmark_code].pct_change().reindex(result["returns"].index).fillna(0.0)
+    benchmark_ret = prices[benchmark_code].reindex(asset_prices.index).pct_change().reindex(result["returns"].index).fillna(0.0)
     benchmark_nav = (1.0 + benchmark_ret).cumprod().rename(benchmark_name)
 
     nav_df = pd.concat([result["nav"], benchmark_nav], axis=1).dropna()
     drawdown_df = nav_df / nav_df.cummax() - 1.0
     turnover_zero = pd.Series(0.0, index=nav_df.index)
-    rf_ret, rf_nav, rf_label = load_risk_free_returns(RISK_FREE_PATH)
+    rf_ret, rf_nav, rf_label = _load_default_rf()
     metrics = pd.concat(
         {
             "自定义ERC": build_period_table(
@@ -105,7 +109,7 @@ def run_custom_backtest(
         "metrics": metrics,
         "common_start": common_start,
         "common_end": common_end,
-        "benchmark_prices": aligned_prices[[benchmark_code]],
+        "benchmark_prices": prices.loc[asset_prices.index, [benchmark_code]],
     }
 
 
@@ -176,16 +180,15 @@ def run_two_layer_erc(
 
     # Collect all unique asset codes across groups
     all_asset_codes = list(dict.fromkeys(code for g in groups for code in g["assets"]))
-    all_needed = list(dict.fromkeys(all_asset_codes + [benchmark_code]))
 
-    # Align common date window
-    common_start, common_end = available_window(prices, all_needed)
+    # Align common date window — from ERC assets only
+    common_start, common_end = available_window(prices, all_asset_codes)
     start = max(pd.Timestamp(start_date), common_start)
     end = min(pd.Timestamp(end_date), common_end)
     if start >= end:
         raise ValueError("所选资产在当前回测区间没有足够的共同数据。")
 
-    aligned = prices.loc[start:end, all_needed].dropna(how="any")
+    aligned = prices.loc[start:end, all_asset_codes].dropna(how="any")
     if len(aligned) <= lookback + 5:
         raise ValueError("共同样本过短，请减少回看窗口或调整资产/日期。")
 
@@ -251,13 +254,13 @@ def run_two_layer_erc(
         final_ret = final_ret - (cost_bps / 10000.0) * final_turnover
     final_nav = (1.0 + final_ret).cumprod().rename("两层ERC")
 
-    benchmark_ret = aligned[benchmark_code].pct_change().reindex(final_nav.index).fillna(0.0)
+    benchmark_ret = prices[benchmark_code].reindex(aligned.index).pct_change().reindex(final_nav.index).fillna(0.0)
     benchmark_nav = (1.0 + benchmark_ret).cumprod().rename(benchmark_name)
 
     nav_df = pd.concat([final_nav, benchmark_nav], axis=1).dropna()
     drawdown_df = nav_df / nav_df.cummax() - 1.0
     turnover_zero = pd.Series(0.0, index=nav_df.index)
-    rf_ret, rf_nav, rf_label = load_risk_free_returns(RISK_FREE_PATH)
+    rf_ret, rf_nav, rf_label = _load_default_rf()
     metrics = pd.concat(
         {
             "两层ERC": build_period_table(
