@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 from html import escape
 from pathlib import Path
+import uuid
 
 import pandas as pd
 import streamlit as st
@@ -19,8 +21,6 @@ from src.custom import (
 from src.data_loader import extract_rf_from_prices, load_wind_price_table
 from src.metrics import compute_rf_rates_per_period
 from src.risk_control import run_final_indicator_overlay
-
-import uuid
 
 
 st.set_page_config(page_title="基准 ERC 看板", layout="wide")
@@ -471,15 +471,28 @@ with col_dl:
         mime="application/zip",
         use_container_width=True,
     )
+# ═══════════════════════════════════════════════════════
+# 恢复已保存配置 — 必须在 sidebar widget 之前执行
+# ═══════════════════════════════════════════════════════
+if st.session_state.get("_sc_pending_restore"):
+    _cfg = st.session_state.pop("_sc_pending_restore")
+    st.session_state.lookback = int(_cfg.get("lookback", 60))
+    st.session_state.rebalance_label = _cfg.get("rebalance_label", "月度")
+    st.session_state.rebalance_day = int(_cfg.get("rebalance_day", 1))
+    st.session_state.cost_bps = int(_cfg.get("cost_bps", 0))
+    st.session_state.erc_mode = _cfg.get("mode", "基础")
+    st.session_state._sc_custom_restore = _cfg
+
 with st.sidebar:
     st.header("参数")
     start_date = st.date_input("回测起点", value=pd.Timestamp("2010-01-01"))
-    lookback = st.number_input("ERC回看窗口（日）", min_value=20, max_value=252, value=60, step=5)
-    rebalance_label = st.radio("调仓频率", ["月度", "周度", "日度"], horizontal=True)
+    lookback = st.number_input("ERC回看窗口（日）", min_value=20, max_value=252, value=60, step=5, key="lookback")
+    rebalance_label = st.radio("调仓频率", ["月度", "周度", "日度"], horizontal=True, key="rebalance_label")
     rebalance_map = {"月度": "M", "周度": "W", "日度": "D"}
     rebalance = rebalance_map[rebalance_label]
     if rebalance == "D":
         rebalance_day = 1
+        st.session_state.rebalance_day = 1
         st.caption("日度调仓：每个交易日更新权重，次一交易日生效。")
     else:
         period_label = "每月" if rebalance == "M" else "每周"
@@ -490,10 +503,11 @@ with st.sidebar:
             max_value=max_day,
             value=1,
             step=1,
+            key="rebalance_day",
         )
         st.caption(f"{period_label}第 {rebalance_day} 个交易日计算新权重，次一交易日生效；若当期交易日不足，则使用当期最后一个交易日。")
 
-    cost_bps = st.number_input("双边交易成本（bps）", min_value=0, max_value=500, value=0, step=1)
+    cost_bps = st.number_input("双边交易成本（bps）", min_value=0, max_value=500, value=0, step=1, key="cost_bps")
 
     with st.expander("尾部风险参数", expanded=False):
         risk_defaults = {
@@ -679,6 +693,15 @@ with page_custom:
         st.warning("没有识别到可用资产。")
         st.stop()
 
+    def _coerce_saved_date(value, lower: pd.Timestamp, upper: pd.Timestamp) -> pd.Timestamp:
+        try:
+            ts = pd.Timestamp(value)
+        except Exception:
+            return lower
+        if pd.isna(ts):
+            return lower
+        return min(max(ts, lower), upper)
+
     st.caption(f"当前数据：{data_label}")
     render_plain_table(
         catalog.assign(
@@ -686,6 +709,173 @@ with page_custom:
             结束日期=lambda df: df["结束日期"].dt.strftime("%Y-%m-%d"),
         )
     )
+
+    # ── 从 flag 恢复自定义部分配置（必须在 custom widget 渲染之前） ──
+    _restore = st.session_state.pop("_sc_custom_restore", None)
+    if _restore is not None:
+        restored_mode = _restore.get("mode", "基础")
+        st.session_state.erc_mode = restored_mode
+        if restored_mode == "基础":
+            restored_codes = [c for c in _restore.get("selected_codes", []) if c in custom_prices.columns]
+            st.session_state.custom_sel_codes = restored_codes
+            if _restore.get("benchmark_code") in custom_prices.columns:
+                st.session_state.custom_benchmark = _restore["benchmark_code"]
+            if len(restored_codes) >= 2:
+                common_start, common_end = available_window(custom_prices, restored_codes)
+                st.session_state.custom_start = _coerce_saved_date(_restore.get("custom_start"), common_start, common_end)
+                st.session_state.custom_end = _coerce_saved_date(_restore.get("custom_end"), common_start, common_end)
+            st.session_state._sc_auto_run_basic = True
+        else:
+            restored_groups = []
+            for group in _restore.get("nested_groups", []):
+                gid = group.get("id") or str(uuid.uuid4())
+                assets = [c for c in group.get("assets", []) if c in custom_prices.columns]
+                restored_group = {
+                    "id": gid,
+                    "name": group.get("name") or "未命名",
+                    "assets": assets,
+                }
+                restored_groups.append(restored_group)
+                st.session_state[f"gname_{gid}"] = restored_group["name"]
+                st.session_state[f"gassets_{gid}"] = assets
+            st.session_state.nested_groups = restored_groups
+            if _restore.get("benchmark_code") in custom_prices.columns:
+                st.session_state.nested_benchmark = _restore["benchmark_code"]
+            all_restored_codes = list(dict.fromkeys(c for g in restored_groups for c in g.get("assets", [])))
+            if all_restored_codes:
+                common_start, common_end = available_window(custom_prices, all_restored_codes)
+                st.session_state.nested_start = _coerce_saved_date(_restore.get("custom_start"), common_start, common_end)
+                st.session_state.nested_end = _coerce_saved_date(_restore.get("custom_end"), common_start, common_end)
+            st.session_state._sc_auto_run_nested = True
+
+    # ── 已保存配置 ──
+    if "saved_custom_configs" not in st.session_state:
+        st.session_state.saved_custom_configs = []
+
+    def _capture_config(name: str) -> dict:
+        cfg = {
+            "name": name,
+            "mode": st.session_state.erc_mode,
+            "lookback": st.session_state.lookback,
+            "rebalance_label": st.session_state.rebalance_label,
+            "rebalance_day": st.session_state.get("rebalance_day", 1),
+            "cost_bps": st.session_state.cost_bps,
+        }
+        if st.session_state.erc_mode == "基础":
+            cfg["selected_codes"] = copy.copy(st.session_state.get("custom_sel_codes", []))
+            cfg["benchmark_code"] = st.session_state.get("custom_benchmark", "")
+            cfg["custom_start"] = str(st.session_state.get("custom_start", ""))
+            cfg["custom_end"] = str(st.session_state.get("custom_end", ""))
+        else:
+            nested_groups = []
+            for group in st.session_state.get("nested_groups", []):
+                assets = [c for c in group.get("assets", []) if c in custom_prices.columns]
+                if not assets:
+                    continue
+                nested_groups.append(
+                    {
+                        "id": group.get("id") or str(uuid.uuid4()),
+                        "name": group.get("name") or "未命名",
+                        "assets": assets,
+                    }
+                )
+            cfg["benchmark_code"] = st.session_state.get("nested_benchmark", "")
+            cfg["nested_groups"] = nested_groups
+            cfg["custom_start"] = str(st.session_state.get("nested_start", ""))
+            cfg["custom_end"] = str(st.session_state.get("nested_end", ""))
+        return cfg
+
+    st.markdown("---")
+    st.markdown("##### 已保存配置")
+
+    def _asset_label(code: str) -> str:
+        name = custom_names.get(code, code)
+        return f"{name}({code})" if name != code else code
+
+    def _short_assets(codes: list[str], limit: int = 5) -> str:
+        valid_codes = [c for c in codes if c in custom_prices.columns]
+        if not valid_codes:
+            return "暂无有效资产"
+        shown = "、".join(_asset_label(c) for c in valid_codes[:limit])
+        if len(valid_codes) > limit:
+            shown += f"、…等{len(valid_codes)}项"
+        return shown
+
+    def _date_text(cfg: dict) -> str:
+        start = cfg.get("custom_start") or "-"
+        end = cfg.get("custom_end") or "-"
+        return f"{start} 至 {end}"
+
+    # Helper to build asset summary text
+    def _config_summary(cfg: dict) -> tuple[str, str]:
+        if cfg["mode"] == "基础":
+            codes = cfg.get("selected_codes", [])
+            return f"{len(codes)} 项资产", _short_assets(codes)
+        groups = cfg.get("nested_groups", [])
+        group_parts = []
+        all_codes = []
+        for g in groups:
+            gname = g.get("name") or "未命名"
+            assets = g.get("assets", [])
+            all_codes.extend(assets)
+            group_parts.append(f"{gname}: {_short_assets(assets, limit=3)}")
+        unique_codes = list(dict.fromkeys(all_codes))
+        headline = f"{len(groups)} 个大组 / {len(unique_codes)} 项去重资产"
+        detail = "；".join(group_parts) if group_parts else "暂无有效大组"
+        return headline, detail
+
+    rebalance_labels = {"M": "月度", "W": "周度", "D": "日度"}
+
+    if st.session_state.saved_custom_configs:
+        for i, cfg_dict in enumerate(st.session_state.saved_custom_configs):
+            _m = "基础" if cfg_dict["mode"] == "基础" else "嵌套"
+            _bm = cfg_dict.get("benchmark_code", "-")
+            _rb = rebalance_labels.get(cfg_dict.get("rebalance_label", ""), cfg_dict.get("rebalance_label", ""))
+            _lb = cfg_dict.get("lookback", "-")
+            _cost = cfg_dict.get("cost_bps", 0)
+            _bm_code = cfg_dict.get("benchmark_code", "-")
+            _bm_label = _asset_label(_bm_code) if _bm_code in custom_prices.columns else _bm_code
+            _summary_head, _summary_detail = _config_summary(cfg_dict)
+
+            with st.container(border=True):
+                row1 = st.columns([3, 2, 1])
+                with row1[0]:
+                    st.markdown(f"**{cfg_dict['name']}**")
+                with row1[1]:
+                    st.markdown(f"`{_m}`  `{_bm_code}`")
+                with row1[2]:
+                    if st.button("×", key=f"sc_del_{i}", use_container_width=True):
+                        st.session_state.saved_custom_configs.pop(i)
+                        st.rerun()
+
+                st.caption(f"基准：{_bm_label}")
+                st.caption(f"{_summary_head} · 区间 {_date_text(cfg_dict)} · 回看{_lb}日 · {_rb}调仓 · 成本{_cost}bps")
+                if _summary_detail:
+                    st.text(_summary_detail)
+
+                if st.button("恢复此配置", key=f"sc_load_{i}", use_container_width=True):
+                    st.session_state.erc_mode = cfg_dict.get("mode", "基础")
+                    st.session_state._sc_custom_restore = copy.deepcopy(cfg_dict)
+                    st.session_state._sc_pending_restore = copy.deepcopy(cfg_dict)
+                    st.rerun()
+    else:
+        st.caption("暂无已保存配置。")
+    if st.button("+ 保存当前配置", use_container_width=True, key="sc_save_btn"):
+        st.session_state._show_save_dialog = True
+    if st.session_state.get("_show_save_dialog"):
+        default_name = f"组合-{len(st.session_state.saved_custom_configs) + 1}"
+        save_name = st.text_input("配置名称", value=default_name, key="sc_save_name")
+        c_ok, c_cancel = st.columns([1, 1])
+        with c_ok:
+            if st.button("确认保存", key="sc_save_confirm"):
+                if save_name.strip():
+                    cfg = _capture_config(save_name.strip())
+                    st.session_state.saved_custom_configs.append(cfg)
+                    st.session_state._show_save_dialog = False
+        with c_cancel:
+            if st.button("取消", key="sc_save_cancel"):
+                st.session_state._show_save_dialog = False
+    st.markdown("---")
 
     # ── Mode toggle ──
     if "erc_mode" not in st.session_state:
@@ -700,6 +890,7 @@ with page_custom:
             options=catalog["代码"].tolist(),
             default=default_codes,
             format_func=lambda code: label_by_code.get(code, code),
+            key="custom_sel_codes",
         )
         benchmark_default = "H00300.CSI" if "H00300.CSI" in catalog["代码"].tolist() else catalog["代码"].iloc[0]
         benchmark_code = st.selectbox(
@@ -707,15 +898,17 @@ with page_custom:
             options=catalog["代码"].tolist(),
             index=catalog["代码"].tolist().index(benchmark_default),
             format_func=lambda code: label_by_code.get(code, code),
+            key="custom_benchmark",
         )
 
         if len(selected_codes) >= 2:
             common_start, common_end = available_window(custom_prices, selected_codes)
             st.info(f"所选资产共同可用区间：{common_start.strftime('%Y-%m-%d')} 至 {common_end.strftime('%Y-%m-%d')}")
             custom_col1, custom_col2, custom_col3 = st.columns([1, 1, 1])
-            custom_start = custom_col1.date_input("自定义回测起点", value=common_start, min_value=common_start, max_value=common_end)
-            custom_end = custom_col2.date_input("自定义回测终点", value=common_end, min_value=common_start, max_value=common_end)
-            run_button = custom_col3.button("开始计算", type="primary", width="stretch")
+            custom_start = custom_col1.date_input("自定义回测起点", value=common_start, min_value=common_start, max_value=common_end, key="custom_start")
+            custom_end = custom_col2.date_input("自定义回测终点", value=common_end, min_value=common_start, max_value=common_end, key="custom_end")
+            _auto_run_basic = st.session_state.pop("_sc_auto_run_basic", False)
+            run_button = custom_col3.button("开始计算", type="primary", width="stretch") or _auto_run_basic
         else:
             st.warning("请至少选择 2 个资产。")
             run_button = False
@@ -736,7 +929,92 @@ with page_custom:
                 )
             except Exception as exc:
                 st.error(f"自定义组合计算失败：{exc}")
+                st.session_state.pop("_sc_basic_result_state", None)
             else:
+                st.session_state._sc_basic_result_state = {
+                    "selected_codes": list(selected_codes),
+                    "benchmark_code": benchmark_code,
+                    "result": custom_result,
+                }
+                selected_labels = {code: custom_names.get(code, code) for code in selected_codes}
+                benchmark_name = custom_names.get(benchmark_code, benchmark_code)
+                custom_nav = custom_result["nav_df"]
+                custom_weights = custom_result["weights"]
+                latest_custom_weights = custom_weights.iloc[-1].rename(index=selected_labels)
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("起算日", custom_nav.index.min().strftime("%Y-%m-%d"))
+                c2.metric("截止日", custom_nav.index.max().strftime("%Y-%m-%d"))
+                c3.metric("组合净值", f"{custom_nav['ERC'].iloc[-1]:.2f}")
+
+                st.caption(
+                    f"实际计算区间为 {custom_nav.index.min().strftime('%Y-%m-%d')} 至 {custom_nav.index.max().strftime('%Y-%m-%d')}；"
+                    f"对比基准为 {benchmark_name}。"
+                )
+
+                tab_overview, tab_tail_risk = st.tabs(["表现", "尾部风险"])
+
+                with tab_overview:
+                    st.plotly_chart(
+                        baseline_dashboard_chart(
+                            custom_nav,
+                            custom_result["drawdown_df"],
+                            custom_weights,
+                            selected_labels,
+                        ),
+                        width="stretch",
+                    )
+
+                    st.subheader("核心指标")
+                    rf_rates = compute_rf_rates_per_period(_cached_rf_nav(), custom_nav.index)
+                    render_sharpe_note(rf_rates=rf_rates)
+                    render_metric_block("收益与风险", custom_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
+                    render_metric_block("回撤", custom_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
+                    render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
+
+                    st.subheader("最新一期持仓")
+                    render_plain_table(
+                        latest_custom_weights.rename_axis("资产")
+                        .reset_index(name="最新权重")
+                        .assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}"))
+                    )
+
+                with tab_tail_risk:
+                    try:
+                        custom_tail_risk = cached_custom_final_risk_control(
+                            custom_result["asset_prices"],
+                            custom_result["benchmark_prices"],
+                            custom_result["weights"],
+                            custom_nav["ERC"],
+                            rebalance, int(rebalance_day),
+                            int(pc1_window),
+                            int(pc1_ma_window),
+                            int(pc1_mean_window),
+                            int(dsv_window),
+                            int(final_ma_window),
+                            float(mid_threshold),
+                            float(high_threshold),
+                            float(mid_cash_pct) / 100.0,
+                            float(high_cash_pct) / 100.0,
+                            *_cached_rf(),
+                        )
+                    except Exception as exc:
+                        st.error(f"尾部风险计算失败：{exc}")
+                    else:
+                        metric_idx = custom_tail_risk["metrics"].index
+                        old_level = metric_idx.levels[metric_idx.names.index("组合")]
+                        new_level = pd.Index([benchmark_name if v == "沪深300" else v for v in old_level])
+                        custom_tail_risk["metrics"].index = metric_idx.set_levels(new_level, level="组合")
+                        custom_tail_risk["nav_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                        custom_tail_risk["drawdown_df"].rename(columns={"沪深300": benchmark_name}, inplace=True)
+                        render_tail_risk_panel(
+                            custom_tail_risk["signals"], custom_tail_risk["exposure"],
+                            custom_tail_risk, selected_labels,
+                        )
+        elif st.session_state.get("_sc_basic_result_state") is not None:
+            saved_state = st.session_state._sc_basic_result_state
+            if saved_state.get("selected_codes") == list(selected_codes) and saved_state.get("benchmark_code") == benchmark_code:
+                custom_result = saved_state["result"]
                 selected_labels = {code: custom_names.get(code, code) for code in selected_codes}
                 benchmark_name = custom_names.get(benchmark_code, benchmark_code)
                 custom_nav = custom_result["nav_df"]
@@ -919,7 +1197,12 @@ with page_custom:
 
         _cache = _nested_cache()
 
-        if run_nested and has_valid_groups:
+        # 恢复配置后自动触发回测
+        _auto_nested = st.session_state.pop("_sc_auto_run_nested", False)
+        if _auto_nested:
+            _cache.result = None  # 清除旧缓存
+
+        if (run_nested or _auto_nested) and has_valid_groups:
             try:
                 _cache.result = run_two_layer_erc(
                     prices=custom_prices,
