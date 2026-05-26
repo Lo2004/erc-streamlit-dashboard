@@ -220,6 +220,148 @@ def render_sharpe_note(rf_rates: dict[str, str] | None = None) -> None:
     st.caption("  ".join(parts))
 
 
+def render_custom_result_summary(
+    nav_df: pd.DataFrame,
+    weights: pd.DataFrame,
+    weight_change: pd.Series,
+    labels: dict[str, str],
+    portfolio_col: str,
+    benchmark_col: str,
+    last_rebalance_date: pd.Timestamp,
+    next_rebalance_date: pd.Timestamp,
+) -> None:
+    latest_date = nav_df.index.max()
+    latest_weights = weights.iloc[-1].sort_values(ascending=False)
+
+    metric_cols = st.columns(3)
+    metric_cols[0].metric("最新日期", latest_date.strftime("%Y-%m-%d"))
+    metric_cols[1].metric(f"{portfolio_col}净值", f"{nav_df[portfolio_col].iloc[-1]:.2f}")
+    metric_cols[2].metric(f"{benchmark_col}净值", f"{nav_df[benchmark_col].iloc[-1]:.2f}")
+
+    last_text = "NA" if pd.isna(last_rebalance_date) else last_rebalance_date.strftime("%Y-%m-%d")
+    next_text = "NA" if pd.isna(next_rebalance_date) else next_rebalance_date.strftime("%Y-%m-%d")
+    reb_cols = st.columns([1, 1, 2])
+    reb_cols[0].metric("上次调仓日", last_text)
+    reb_cols[1].metric("下次调仓日", next_text)
+    reb_cols[2].caption("调仓日按当前频率与第几个交易日设置估算；权重在调仓计算日后的下一交易日生效。")
+
+    st.caption(
+        f"实际计算区间为 {nav_df.index.min().strftime('%Y-%m-%d')} 至 {latest_date.strftime('%Y-%m-%d')}；"
+        "下方展示最新一期全部持仓，按权重从高到低排列。"
+    )
+    render_weight_strip(latest_weights, weight_change, labels)
+
+
+def render_weight_strip(weights: pd.Series, weight_change: pd.Series | None, labels: dict[str, str]) -> None:
+    if weights.empty:
+        return
+
+    max_weight = max(float(weights.max()), 1e-9)
+    rows = []
+    for code, value in weights.items():
+        label = labels.get(code, code)
+        change = weight_change.get(code, 0.0) if weight_change is not None else 0.0
+        width = max(float(value) / max_weight * 100.0, 1.0)
+        delta_class = "positive" if change >= 0 else "negative"
+        rows.append(
+            f'<div class="weight-row">'
+            f'<div class="weight-topline">'
+            f'<span class="weight-name">{escape(str(label))}</span>'
+            f'<span class="weight-value">{value:.2%}</span>'
+            f'<span class="weight-delta {delta_class}">{change:+.2%}</span>'
+            f'</div>'
+            f'<div class="weight-track"><div class="weight-bar" style="width:{width:.2f}%"></div></div>'
+            f'</div>'
+        )
+
+    st.markdown(
+        """
+        <style>
+        .weight-panel {
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            padding: 14px 16px 10px;
+            margin: 8px 0 18px;
+            background: linear-gradient(180deg, #ffffff 0%, #fbfcfd 100%);
+            max-height: 360px;
+            overflow-y: auto;
+        }
+        .weight-panel-title {
+            color: #111827;
+            font-size: 15px;
+            font-weight: 650;
+            margin: 0 0 10px;
+        }
+        .weight-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px 18px;
+        }
+        .weight-row {
+            min-width: 0;
+        }
+        .weight-topline {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto auto;
+            align-items: center;
+            gap: 8px;
+            color: #111827;
+            font-size: 13px;
+            line-height: 1.35;
+        }
+        .weight-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .weight-value {
+            font-variant-numeric: tabular-nums;
+            font-weight: 650;
+        }
+        .weight-delta {
+            border-radius: 999px;
+            font-size: 11px;
+            padding: 2px 7px;
+            font-variant-numeric: tabular-nums;
+        }
+        .weight-delta.positive {
+            color: #067647;
+            background: #dcfae6;
+        }
+        .weight-delta.negative {
+            color: #b42318;
+            background: #fee4e2;
+        }
+        .weight-track {
+            height: 7px;
+            background: #edf1f5;
+            border-radius: 999px;
+            margin-top: 6px;
+            overflow: hidden;
+        }
+        .weight-bar {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #111827 0%, #3b82f6 100%);
+        }
+        @media (max-width: 900px) {
+            .weight-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="weight-panel">'
+        '<div class="weight-panel-title">最新一期持仓</div>'
+        f'<div class="weight-grid">{"".join(rows)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 @st.cache_data(show_spinner=False)
 def cached_compute_baseline(path: str, start_date: str, lookback: int, rebalance: str, rebalance_day: int, cost_bps: float):
     return compute_baseline(path, start_date, lookback, rebalance, rebalance_day, cost_bps=cost_bps)
@@ -726,6 +868,10 @@ with page_custom:
     if catalog.empty:
         st.warning("没有识别到可用资产。")
         st.stop()
+    _has_custom_result = (
+        st.session_state.get("_sc_basic_result_state") is not None
+        or st.session_state.get("_sc_nested_has_result", False)
+    )
 
     def _coerce_saved_date(value, lower: pd.Timestamp, upper: pd.Timestamp) -> pd.Timestamp:
         try:
@@ -736,13 +882,14 @@ with page_custom:
             return lower
         return min(max(ts, lower), upper)
 
-    st.caption(f"当前数据：{data_label}")
-    render_plain_table(
-        catalog.assign(
-            起始日期=lambda df: df["起始日期"].dt.strftime("%Y-%m-%d"),
-            结束日期=lambda df: df["结束日期"].dt.strftime("%Y-%m-%d"),
+    with st.expander("数据与可用资产池", expanded=not _has_custom_result):
+        st.caption(f"当前数据：{data_label}")
+        render_plain_table(
+            catalog.assign(
+                起始日期=lambda df: df["起始日期"].dt.strftime("%Y-%m-%d"),
+                结束日期=lambda df: df["结束日期"].dt.strftime("%Y-%m-%d"),
+            )
         )
-    )
 
     # ── 从 flag 恢复自定义部分配置（必须在 custom widget 渲染之前） ──
     _restore = st.session_state.pop("_sc_custom_restore", None)
@@ -1086,35 +1233,36 @@ with page_custom:
     erc_mode = st.radio("ERC模式", ["基础", "嵌套"], horizontal=True, key="erc_mode")
 
     if erc_mode == "基础":
-        label_by_code = {row["代码"]: f"{row['名称']} | {row['代码']}" for _, row in catalog.iterrows()}
-        default_codes = catalog["代码"].head(min(3, len(catalog))).tolist()
-        selected_codes = st.multiselect(
-            "选择纳入 ERC 的资产",
-            options=catalog["代码"].tolist(),
-            default=default_codes,
-            format_func=lambda code: label_by_code.get(code, code),
-            key="custom_sel_codes",
-        )
-        benchmark_default = "H00300.CSI" if "H00300.CSI" in catalog["代码"].tolist() else catalog["代码"].iloc[0]
-        benchmark_code = st.selectbox(
-            "选择对比基准资产",
-            options=catalog["代码"].tolist(),
-            index=catalog["代码"].tolist().index(benchmark_default),
-            format_func=lambda code: label_by_code.get(code, code),
-            key="custom_benchmark",
-        )
+        with st.expander("组合设置（基础模式）", expanded=not _has_custom_result):
+            label_by_code = {row["代码"]: f"{row['名称']} | {row['代码']}" for _, row in catalog.iterrows()}
+            default_codes = catalog["代码"].head(min(3, len(catalog))).tolist()
+            selected_codes = st.multiselect(
+                "选择纳入 ERC 的资产",
+                options=catalog["代码"].tolist(),
+                default=default_codes,
+                format_func=lambda code: label_by_code.get(code, code),
+                key="custom_sel_codes",
+            )
+            benchmark_default = "H00300.CSI" if "H00300.CSI" in catalog["代码"].tolist() else catalog["代码"].iloc[0]
+            benchmark_code = st.selectbox(
+                "选择对比基准资产",
+                options=catalog["代码"].tolist(),
+                index=catalog["代码"].tolist().index(benchmark_default),
+                format_func=lambda code: label_by_code.get(code, code),
+                key="custom_benchmark",
+            )
 
-        if len(selected_codes) >= 2:
-            common_start, common_end = available_window(custom_prices, selected_codes)
-            st.info(f"所选资产共同可用区间：{common_start.strftime('%Y-%m-%d')} 至 {common_end.strftime('%Y-%m-%d')}")
-            custom_col1, custom_col2, custom_col3 = st.columns([1, 1, 1])
-            custom_start = custom_col1.date_input("自定义回测起点", value=common_start, min_value=common_start, max_value=common_end, key="custom_start")
-            custom_end = custom_col2.date_input("自定义回测终点", value=common_end, min_value=common_start, max_value=common_end, key="custom_end")
-            _auto_run_basic = st.session_state.pop("_sc_auto_run_basic", False)
-            run_button = custom_col3.button("开始计算", type="primary", width="stretch") or _auto_run_basic
-        else:
-            st.warning("请至少选择 2 个资产。")
-            run_button = False
+            if len(selected_codes) >= 2:
+                common_start, common_end = available_window(custom_prices, selected_codes)
+                st.info(f"所选资产共同可用区间：{common_start.strftime('%Y-%m-%d')} 至 {common_end.strftime('%Y-%m-%d')}")
+                custom_col1, custom_col2, custom_col3 = st.columns([1, 1, 1])
+                custom_start = custom_col1.date_input("自定义回测起点", value=common_start, min_value=common_start, max_value=common_end, key="custom_start")
+                custom_end = custom_col2.date_input("自定义回测终点", value=common_end, min_value=common_start, max_value=common_end, key="custom_end")
+                _auto_run_basic = st.session_state.pop("_sc_auto_run_basic", False)
+                run_button = custom_col3.button("开始计算", type="primary", width="stretch") or _auto_run_basic
+            else:
+                st.warning("请至少选择 2 个资产。")
+                run_button = False
 
         if run_button:
             try:
@@ -1145,14 +1293,15 @@ with page_custom:
                 custom_weights = custom_result["weights"]
                 latest_custom_weights = custom_weights.iloc[-1].rename(index=selected_labels)
 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("起算日", custom_nav.index.min().strftime("%Y-%m-%d"))
-                c2.metric("截止日", custom_nav.index.max().strftime("%Y-%m-%d"))
-                c3.metric("组合净值", f"{custom_nav['ERC'].iloc[-1]:.2f}")
-
-                st.caption(
-                    f"实际计算区间为 {custom_nav.index.min().strftime('%Y-%m-%d')} 至 {custom_nav.index.max().strftime('%Y-%m-%d')}；"
-                    f"对比基准为 {benchmark_name}。"
+                render_custom_result_summary(
+                    custom_nav,
+                    custom_weights,
+                    custom_result["weight_change"],
+                    selected_labels,
+                    "ERC",
+                    benchmark_name,
+                    custom_result["last_rebalance_date"],
+                    custom_result["next_rebalance_date"],
                 )
 
                 tab_overview, tab_tail_risk = st.tabs(["表现", "尾部风险"])
@@ -1180,13 +1329,6 @@ with page_custom:
                     render_metric_block("收益与风险", custom_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
                     render_metric_block("回撤", custom_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
                     render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
-
-                    st.subheader("最新一期持仓")
-                    render_plain_table(
-                        latest_custom_weights.rename_axis("资产")
-                        .reset_index(name="最新权重")
-                        .assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}"))
-                    )
 
                 with tab_tail_risk:
                     try:
@@ -1230,14 +1372,15 @@ with page_custom:
                 custom_weights = custom_result["weights"]
                 latest_custom_weights = custom_weights.iloc[-1].rename(index=selected_labels)
 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("起算日", custom_nav.index.min().strftime("%Y-%m-%d"))
-                c2.metric("截止日", custom_nav.index.max().strftime("%Y-%m-%d"))
-                c3.metric("组合净值", f"{custom_nav['ERC'].iloc[-1]:.2f}")
-
-                st.caption(
-                    f"实际计算区间为 {custom_nav.index.min().strftime('%Y-%m-%d')} 至 {custom_nav.index.max().strftime('%Y-%m-%d')}；"
-                    f"对比基准为 {benchmark_name}。"
+                render_custom_result_summary(
+                    custom_nav,
+                    custom_weights,
+                    custom_result["weight_change"],
+                    selected_labels,
+                    "ERC",
+                    benchmark_name,
+                    custom_result["last_rebalance_date"],
+                    custom_result["next_rebalance_date"],
                 )
 
                 tab_overview, tab_tail_risk = st.tabs(["表现", "尾部风险"])
@@ -1265,13 +1408,6 @@ with page_custom:
                     render_metric_block("收益与风险", custom_result["metrics"], ["年化收益", "年化波动率", "夏普比率", "卡玛比率"])
                     render_metric_block("回撤", custom_result["metrics"], ["最大回撤", "最大回撤开始时间", "最大回撤结束时间", "最长回撤修复期(天)"])
                     render_metric_block("交易与胜率", custom_result["metrics"], ["月均换手率", "月胜率", "日胜率"])
-
-                    st.subheader("最新一期持仓")
-                    render_plain_table(
-                        latest_custom_weights.rename_axis("资产")
-                        .reset_index(name="最新权重")
-                        .assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}"))
-                    )
 
                 with tab_tail_risk:
                     try:
@@ -1310,101 +1446,92 @@ with page_custom:
         code_list = catalog["代码"].tolist()
         asset_options = {code: custom_names.get(code, code) for code in code_list}
 
-        st.markdown("##### 可用资产池")
-        st.markdown('<style>.asset-tag{display:inline-block;background:#f4f5f8;border:1px solid #dce0e8;border-radius:6px;padding:5px 12px;margin:4px 6px 4px 0;font-size:13px;white-space:nowrap;transition:background .15s}.asset-tag:hover{background:#e8ebf1}.asset-tag .code{color:#8e94a0;font-size:11px;margin-left:4px}</style>', unsafe_allow_html=True)
-        tag_html = "".join(
-            f'<span class="asset-tag">{asset_options[code]} <span class="code">({code})</span></span>'
-            for code in code_list
-        )
-        st.markdown(f'<div style="line-height:2.4">{tag_html}</div>', unsafe_allow_html=True)
+        with st.expander("组合设置（嵌套模式）", expanded=not _has_custom_result):
+            # Initialize nested groups
+            if "nested_groups" not in st.session_state:
+                st.session_state.nested_groups = []
 
-        st.markdown("---")
+            col_groups, col_bench = st.columns([3, 1])
+            with col_groups:
+                st.markdown("##### 大组定义")
 
-        # Initialize nested groups
-        if "nested_groups" not in st.session_state:
-            st.session_state.nested_groups = []
-
-        col_groups, col_bench = st.columns([3, 1])
-        with col_groups:
-            st.markdown("##### 大组定义")
-
-            # Render each group
-            to_delete = None
-            for gi, group in enumerate(st.session_state.nested_groups):
-                gid = group["id"]
-                with st.container(border=True):
-                    gcols = st.columns([3, 1])
-                    with gcols[0]:
-                        gname = st.text_input(
-                            "组名",
-                            value=group.get("name", f"大组{gi+1}"),
-                            key=f"gname_{gid}",
+                # Render each group
+                to_delete = None
+                for gi, group in enumerate(st.session_state.nested_groups):
+                    gid = group["id"]
+                    with st.container(border=True):
+                        gcols = st.columns([3, 1])
+                        with gcols[0]:
+                            gname = st.text_input(
+                                "组名",
+                                value=group.get("name", f"大组{gi+1}"),
+                                key=f"gname_{gid}",
+                            )
+                        with gcols[1]:
+                            if st.button("删除大组", key=f"del_{gid}"):
+                                to_delete = gid
+                        g_assets = st.multiselect(
+                            "资产",
+                            options=code_list,
+                            default=[c for c in group.get("assets", []) if c in code_list],
+                            format_func=lambda c: asset_options.get(c, c),
+                            key=f"gassets_{gid}",
                         )
-                    with gcols[1]:
-                        if st.button("删除大组", key=f"del_{gid}"):
-                            to_delete = gid
-                    g_assets = st.multiselect(
-                        "资产",
-                        options=code_list,
-                        default=[c for c in group.get("assets", []) if c in code_list],
-                        format_func=lambda c: asset_options.get(c, c),
-                        key=f"gassets_{gid}",
-                    )
-                    # Persist to session_state
-                    group["name"] = gname
-                    group["assets"] = g_assets
+                        # Persist to session_state
+                        group["name"] = gname
+                        group["assets"] = g_assets
 
-            if to_delete is not None:
-                st.session_state.nested_groups = [
-                    g for g in st.session_state.nested_groups if g["id"] != to_delete
-                ]
-                st.rerun()
+                if to_delete is not None:
+                    st.session_state.nested_groups = [
+                        g for g in st.session_state.nested_groups if g["id"] != to_delete
+                    ]
+                    st.rerun()
 
-            if st.button("+ 添加大组", use_container_width=True):
-                import uuid as _uuid
-                st.session_state.nested_groups.append({
-                    "id": str(_uuid.uuid4()),
-                    "name": f"大组{len(st.session_state.nested_groups)+1}",
-                    "assets": [],
-                })
-                st.rerun()
+                if st.button("+ 添加大组", use_container_width=True):
+                    import uuid as _uuid
+                    st.session_state.nested_groups.append({
+                        "id": str(_uuid.uuid4()),
+                        "name": f"大组{len(st.session_state.nested_groups)+1}",
+                        "assets": [],
+                    })
+                    st.rerun()
 
-        with col_bench:
-            st.markdown("##### 对比基准")
-            benchmark_default = "H00300.CSI" if "H00300.CSI" in code_list else code_list[0]
-            bm_default_idx = code_list.index(benchmark_default) if benchmark_default in code_list else 0
-            benchmark_code = st.selectbox(
-                "基准资产",
-                options=code_list,
-                index=bm_default_idx,
-                format_func=lambda c: asset_options.get(c, c),
-                key="nested_benchmark",
-            )
+            with col_bench:
+                st.markdown("##### 对比基准")
+                benchmark_default = "H00300.CSI" if "H00300.CSI" in code_list else code_list[0]
+                bm_default_idx = code_list.index(benchmark_default) if benchmark_default in code_list else 0
+                benchmark_code = st.selectbox(
+                    "基准资产",
+                    options=code_list,
+                    index=bm_default_idx,
+                    format_func=lambda c: asset_options.get(c, c),
+                    key="nested_benchmark",
+                )
 
-        # Date range & run
-        all_group_codes = list(dict.fromkeys(
-            code for g in st.session_state.nested_groups for code in g.get("assets", [])
-        ))
-        has_valid_groups = len(st.session_state.nested_groups) >= 2 and len(all_group_codes) > 0
+            # Date range & run
+            all_group_codes = list(dict.fromkeys(
+                code for g in st.session_state.nested_groups for code in g.get("assets", [])
+            ))
+            has_valid_groups = len(st.session_state.nested_groups) >= 2 and len(all_group_codes) > 0
 
-        if has_valid_groups:
-            needed = list(dict.fromkeys(all_group_codes + [benchmark_code]))
-            n_common_start, n_common_end = available_window(custom_prices, needed)
-            nest_col1, nest_col2, nest_col3 = st.columns([1, 1, 1])
-            nested_start = nest_col1.date_input(
-                "回测起点", value=n_common_start,
-                min_value=n_common_start, max_value=n_common_end,
-                key="nested_start",
-            )
-            nested_end = nest_col2.date_input(
-                "回测终点", value=n_common_end,
-                min_value=n_common_start, max_value=n_common_end,
-                key="nested_end",
-            )
-            run_nested = nest_col3.button("开始计算", type="primary", width="stretch", key="run_nested")
-        else:
-            st.warning("请至少定义 2 个大组，并为大组添加资产。")
-            run_nested = False
+            if has_valid_groups:
+                needed = list(dict.fromkeys(all_group_codes + [benchmark_code]))
+                n_common_start, n_common_end = available_window(custom_prices, needed)
+                nest_col1, nest_col2, nest_col3 = st.columns([1, 1, 1])
+                nested_start = nest_col1.date_input(
+                    "回测起点", value=n_common_start,
+                    min_value=n_common_start, max_value=n_common_end,
+                    key="nested_start",
+                )
+                nested_end = nest_col2.date_input(
+                    "回测终点", value=n_common_end,
+                    min_value=n_common_start, max_value=n_common_end,
+                    key="nested_end",
+                )
+                run_nested = nest_col3.button("开始计算", type="primary", width="stretch", key="run_nested")
+            else:
+                st.warning("请至少定义 2 个大组，并为大组添加资产。")
+                run_nested = False
 
         @st.cache_resource
         def _nested_cache():
@@ -1432,9 +1559,11 @@ with page_custom:
                     cost_bps=float(cost_bps),
                 )
                 _cache.benchmark_name = custom_names.get(benchmark_code, benchmark_code)
+                st.session_state._sc_nested_has_result = True
             except Exception as exc:
                 st.error(f"两层 ERC 计算失败：{exc}")
                 _cache.result = None
+                st.session_state._sc_nested_has_result = False
 
         if _cache.result is not None:
             nested_result = _cache.result
@@ -1458,14 +1587,15 @@ with page_custom:
                 if codes_in:
                     group_assignments[gname] = codes_in
 
-            n_col1, n_col2, n_col3 = st.columns(3)
-            n_col1.metric("起算日", n_nav.index.min().strftime("%Y-%m-%d"))
-            n_col2.metric("截止日", n_nav.index.max().strftime("%Y-%m-%d"))
-            n_col3.metric("两层ERC净值", f"{n_nav['两层ERC'].iloc[-1]:.2f}")
-
-            st.caption(
-                f"实际计算区间为 {n_nav.index.min().strftime('%Y-%m-%d')} 至 {n_nav.index.max().strftime('%Y-%m-%d')}；"
-                f"对比基准为 {benchmark_name}。"
+            render_custom_result_summary(
+                n_nav,
+                n_eff_w,
+                nested_result["weight_change"],
+                n_labels,
+                "两层ERC",
+                benchmark_name,
+                nested_result["last_rebalance_date"],
+                nested_result["next_rebalance_date"],
             )
 
             nest_tab1, nest_tab2, nest_tab3 = st.tabs(["表现", "两层权重", "尾部风险"])
@@ -1491,6 +1621,13 @@ with page_custom:
                 st.plotly_chart(
                     hierarchical_weights_chart(n_eff_w, group_assignments, n_labels),
                     width="stretch",
+                )
+                st.subheader("底层资产最新净持仓")
+                latest_nested_weights = n_eff_w.iloc[-1].rename(index=n_labels).sort_values(ascending=False)
+                render_plain_table(
+                    latest_nested_weights.rename_axis("资产")
+                    .reset_index(name="最新权重")
+                    .assign(最新权重=lambda df: df["最新权重"].map(lambda x: f"{x:.2%}"))
                 )
                 st.subheader("大组间权重")
                 render_plain_table(

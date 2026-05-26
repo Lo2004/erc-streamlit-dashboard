@@ -8,6 +8,7 @@ from src.data_loader import WindPriceData, load_wind_price_table
 from src.data_loader import extract_rf_from_prices
 from src.erc import run_erc_backtest
 from src.metrics import build_period_table
+from src.baseline import estimate_next_rebalance_date
 
 
 SAMPLE_CUSTOM_PATH = Path("data/自定义ERC-默认数据集.xlsx")
@@ -46,6 +47,47 @@ def available_window(prices: pd.DataFrame, selected_codes: list[str]) -> tuple[p
     starts = [prices[code].dropna().index.min() for code in selected_codes]
     ends = [prices[code].dropna().index.max() for code in selected_codes]
     return max(starts), min(ends)
+
+
+def _rebalance_summary(
+    price_index: pd.DatetimeIndex,
+    weights: pd.DataFrame,
+    rebalance_dates: pd.DatetimeIndex,
+    nav_end: pd.Timestamp,
+    rebalance: str,
+    rebalance_day: int,
+) -> dict:
+    weight_change = pd.Series(0.0, index=weights.columns)
+    last_rebalance_date = pd.NaT
+    next_rebalance_date = pd.NaT
+    effective_rebalance_dates = pd.DatetimeIndex([])
+
+    if len(rebalance_dates) > 0 and not weights.empty:
+        effective_dates = []
+        for date in rebalance_dates:
+            if date not in price_index:
+                continue
+            pos = price_index.get_loc(date)
+            if pos + 1 < len(price_index):
+                effective_dates.append(price_index[pos + 1])
+
+        effective_rebalance_dates = pd.DatetimeIndex(effective_dates)
+        effective_rebalance_dates = effective_rebalance_dates[effective_rebalance_dates.isin(weights.index)]
+        past_effective_dates = effective_rebalance_dates[effective_rebalance_dates <= nav_end]
+
+        if len(past_effective_dates) > 0:
+            last_rebalance_date = past_effective_dates[-1]
+            if len(past_effective_dates) > 1:
+                prev_rebalance_date = past_effective_dates[-2]
+                weight_change = weights.loc[last_rebalance_date] - weights.loc[prev_rebalance_date]
+            next_rebalance_date = estimate_next_rebalance_date(nav_end, rebalance, rebalance_day)
+
+    return {
+        "weight_change": weight_change,
+        "last_rebalance_date": last_rebalance_date,
+        "next_rebalance_date": next_rebalance_date,
+        "effective_rebalance_dates": effective_rebalance_dates,
+    }
 
 
 def run_custom_backtest(
@@ -104,6 +146,14 @@ def run_custom_backtest(
     return {
         "asset_prices": asset_prices,
         "weights": result["weights"],
+        **_rebalance_summary(
+            asset_prices.index,
+            result["weights"],
+            result["rebalance_dates"],
+            nav_df.index.max(),
+            rebalance,
+            rebalance_day,
+        ),
         "nav_df": nav_df,
         "drawdown_df": drawdown_df,
         "metrics": metrics,
@@ -286,6 +336,14 @@ def run_two_layer_erc(
         "metrics": metrics,
         "group_navs": group_navs,
         "effective_weights": effective_weights,
+        **_rebalance_summary(
+            group_price_panel.index,
+            effective_weights,
+            layer2["rebalance_dates"],
+            nav_df.index.max(),
+            rebalance,
+            rebalance_day,
+        ),
         "group_weights": l2_weights,
         "asset_prices": aligned,
         "group_returns": group_returns,
