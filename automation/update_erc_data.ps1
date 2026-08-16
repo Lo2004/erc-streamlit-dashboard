@@ -26,7 +26,8 @@ $xlUp = -4162
 $xlToLeft = -4159
 $sourcePath = (Resolve-Path -LiteralPath $SourceWorkbook).Path
 $repositoryPathResolved = (Resolve-Path -LiteralPath $RepositoryPath).Path
-$destinationRelativePath = "data/自定义ERC-默认数据集.xlsx"
+$destinationFileName = [IO.Path]::GetFileName($sourcePath)
+$destinationRelativePath = "data/$destinationFileName"
 $destinationPath = Join-Path $repositoryPathResolved ($destinationRelativePath -replace "/", "\")
 $logDirectory = Join-Path $repositoryPathResolved "automation\logs"
 New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
@@ -97,7 +98,8 @@ function Get-WindFormulaError {
     # Excel calculation while returning a quota/permission error there, so the
     # data-date check alone is not sufficient on weekends or long holidays.
     $value = [string]$Worksheet.Range("B5").Value2
-    if ($value -match "超限|失败|错误|请联系|无权限|#N/A|#VALUE|#REF|#NAME|#NUM") {
+    $errorPattern = "\u8D85\u9650|\u5931\u8D25|\u9519\u8BEF|\u8BF7\u8054\u7CFB|\u65E0\u6743\u9650|#N/A|#VALUE|#REF|#NAME|#NUM"
+    if ($value -match $errorPattern) {
         return $value
     }
     return ""

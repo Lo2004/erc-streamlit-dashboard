@@ -5,7 +5,7 @@ param(
 
     [string]$RepositoryPath = (Split-Path -Parent $PSScriptRoot),
 
-    [string]$TaskName = "ERC Dashboard 每日刷新",
+    [string]$TaskName = "ERC Dashboard Daily Refresh",
 
     [ValidatePattern("^([01]\d|2[0-3]):[0-5]\d$")]
     [string]$At = "17:00"
