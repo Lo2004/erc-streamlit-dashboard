@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "configs": [
+    {
+      "name": "自由现金流+成长100+长债+黄金+豆粕",
+      "mode": "嵌套",
+      "lookback": 60,
+      "rebalance_label": "月度",
+      "rebalance_day": 10,
+      "cost_bps": 0,
+      "benchmark_code": "H00300.CSI",
+      "custom_start": "2019-12-05",
+      "custom_end": "2026-05-25",
+      "nested_groups": [
+        {
+          "id": "57409a17-ff46-430f-816e-0eb9e5a8620c",
+          "name": "股票",
+          "assets": ["480092.CNI", "480080.CNI"]
+        },
+        {
+          "id": "c2c5c1f1-9edf-4e60-ae18-0859f1accaa2",
+          "name": "债券",
+          "assets": ["CBA21801.CS"]
+        },
+        {
+          "id": "abc0fc21-9fe0-4307-8a44-1e755d5c614f",
+          "name": "黄金",
+          "assets": ["AU9999.SGE"]
+        },
+        {
+          "id": "6f5afe56-5b74-408e-8a10-1f9054cc9fbd",
+          "name": "其他商品",
+          "assets": ["159985.SZ"]
+        }
+      ]
+    },
+    {
+      "name": "自由现金流+成长100+长债+黄金+豆粕2013",
+      "mode": "嵌套",
+      "lookback": 60,
+      "rebalance_label": "月度",
+      "rebalance_day": 10,
+      "cost_bps": 0,
+      "benchmark_code": "H00300.CSI",
+      "custom_start": "2013-01-04",
+      "custom_end": "2026-05-25",
+      "nested_groups": [
+        {
+          "id": "57409a17-ff46-430f-816e-0eb9e5a8620c",
+          "name": "股票",
+          "assets": ["480092.CNI", "480080.CNI"]
+        },
+        {
+          "id": "c2c5c1f1-9edf-4e60-ae18-0859f1accaa2",
+          "name": "债券",
+          "assets": ["CBA21801.CS"]
+        },
+        {
+          "id": "abc0fc21-9fe0-4307-8a44-1e755d5c614f",
+          "name": "黄金",
+          "assets": ["AU9999.SGE"]
+        },
+        {
+          "id": "6f5afe56-5b74-408e-8a10-1f9054cc9fbd",
+          "name": "其他商品",
+          "assets": ["DCESMFI.DCE"]
+        }
+      ]
+    },
+    {
+      "name": "自由现金流+成长100+长债+黄金+豆粕2013+铁矿",
+      "mode": "嵌套",
+      "lookback": 60,
+      "rebalance_label": "月度",
+      "rebalance_day": 10,
+      "cost_bps": 0,
+      "benchmark_code": "H00300.CSI",
+      "custom_start": "2013-10-18",
+      "custom_end": "2026-05-25",
+      "nested_groups": [
+        {
+          "id": "57409a17-ff46-430f-816e-0eb9e5a8620c",
+          "name": "股票",
+          "assets": ["480092.CNI", "480080.CNI"]
+        },
+        {
+          "id": "c2c5c1f1-9edf-4e60-ae18-0859f1accaa2",
+          "name": "债券",
+          "assets": ["CBA21801.CS"]
+        },
+        {
+          "id": "abc0fc21-9fe0-4307-8a44-1e755d5c614f",
+          "name": "黄金",
+          "assets": ["AU9999.SGE"]
+        },
+        {
+          "id": "6f5afe56-5b74-408e-8a10-1f9054cc9fbd",
+          "name": "其他商品",
+          "assets": ["DCESMFI.DCE", "DCEIOFI.DCE"]
+        }
+      ]
+    },
+    {
+      "name": "自由现金流+成长100+长债+黄金+豆粕+铁矿",
+      "mode": "嵌套",
+      "lookback": 60,
+      "rebalance_label": "月度",
+      "rebalance_day": 10,
+      "cost_bps": 0,
+      "benchmark_code": "H00300.CSI",
+      "custom_start": "2019-12-05",
+      "custom_end": "2026-05-25",
+      "nested_groups": [
+        {
+          "id": "57409a17-ff46-430f-816e-0eb9e5a8620c",
+          "name": "股票",
+          "assets": ["480092.CNI", "480080.CNI"]
+        },
+        {
+          "id": "c2c5c1f1-9edf-4e60-ae18-0859f1accaa2",
+          "name": "债券",
+          "assets": ["CBA21801.CS"]
+        },
+        {
+          "id": "abc0fc21-9fe0-4307-8a44-1e755d5c614f",
+          "name": "黄金",
+          "assets": ["518880.OF"]
+        },
+        {
+          "id": "6f5afe56-5b74-408e-8a10-1f9054cc9fbd",
+          "name": "其他商品",
+          "assets": ["DCEIOFI.DCE", "159985.SZ"]
+        }
+      ]
+    }
+  ]
+}

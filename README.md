@@ -91,7 +91,7 @@ $$r_{\text{对冲后},t} = r_{\text{黄金行业},t} - \hat{\beta}_{\text{权益
 
 ### 2. 自定义 ERC Tab
 
-上传 Wind 标准格式的收盘价 Excel（或使用默认示例数据集 `data/自定义ERC-默认数据集.xlsx`），自由选择资产进行 ERC 回测。
+页面默认直接加载 `data/自定义ERC-默认数据集.xlsx`，无需每次访问重新上传。上传控件仅用于临时覆盖本次会话的数据源。
 
 **输入格式要求**：Wind 多行表头导出格式，前 4 行为表头（第 3 行为名称、第 4 行为代码），第 5 行起为数据行，必须包含 `Date` 列。
 
@@ -101,6 +101,7 @@ $$r_{\text{对冲后},t} = r_{\text{黄金行业},t} - \hat{\beta}_{\text{权益
 
 自定义 ERC 支持在页面内保存和恢复当前配置：
 
+- `data/erc_configs2.json` 中的配置会作为网页预置配置自动加载；预置配置的回测终点自动跟随最新可用数据
 - 基础模式保存：入选资产、基准资产、回测区间、回看窗口、调仓频率、交易成本
 - 嵌套模式保存：大组定义、组内资产、基准资产、回测区间、回看窗口、调仓频率、交易成本
 - 已保存配置卡片展示类型、基准、主要资产/大组、回测区间和主要参数
@@ -228,6 +229,33 @@ H20955.CSI  CBA00661.CS  CI005213.WI  H00300.CSI  AU9999.SGE  CBA00621.CS
 ### 更换自定义 ERC 默认数据集
 
 替换 `data/自定义ERC-默认数据集.xlsx`，保持 Wind 标准格式即可。
+
+### 每日自动刷新与发布
+
+仓库提供 Windows 自动更新脚本：
+
+- `automation/update_erc_data.ps1`：通过本机 Excel 打开 Wind 工作簿，等待公式刷新稳定，校验最新数据日期，保存并复制到 `data/自定义ERC-默认数据集.xlsx`，随后提交并推送到当前分支
+- `automation/install_daily_task.ps1`：注册每天 17:00 运行的 Windows 计划任务；任务使用当前登录用户的交互会话，以便加载 Wind Excel 插件
+
+首次安装（在 PowerShell 中运行）：
+
+```powershell
+.\automation\install_daily_task.ps1 `
+  -SourceWorkbook "D:\全天候组合\自定义ERC-默认数据集.xlsx" `
+  -RepositoryPath "D:\全天候组合\erc-streamlit-dashboard" `
+  -At "17:00"
+```
+
+手动试运行但不推送：
+
+```powershell
+.\automation\update_erc_data.ps1 `
+  -SourceWorkbook "D:\全天候组合\自定义ERC-默认数据集.xlsx" `
+  -RepositoryPath "D:\全天候组合\erc-streamlit-dashboard" `
+  -SkipGitPush
+```
+
+运行条件：Windows 已登录、Wind 终端与 Excel 插件可用、Git 凭据可推送本仓库、电脑在计划时间开机或稍后恢复。脚本只有在 Wind 公式无报错、数据日期合理且结果稳定后才覆盖并发布线上文件；失败时保留上一版数据。日志写入 `automation/logs/`（已忽略，不提交）。推送后 Streamlit Community Cloud 会按仓库新提交自动重新部署。
 
 ### 更换交易日历
 

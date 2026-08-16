@@ -20,6 +20,7 @@ from src.custom import (
     run_custom_backtest_with_benchmark,
     run_two_layer_erc,
 )
+from src.config_presets import DEFAULT_CONFIG_PATH, load_preset_configs
 from src.data_loader import extract_rf_from_prices, load_wind_price_table
 from src.risk_control import run_final_indicator_overlay
 
@@ -384,7 +385,10 @@ def _cached_rf_nav() -> pd.Series:
 
 
 @st.cache_data(show_spinner=False)
-def cached_load_custom(path_or_file) -> tuple[pd.DataFrame, dict[str, str]]:
+def cached_load_custom(path_or_file, version_token: int | None = None) -> tuple[pd.DataFrame, dict[str, str]]:
+    # version_token deliberately participates in Streamlit's cache key.  It
+    # lets a replaced on-disk workbook become visible immediately on rerun.
+    del version_token
     loaded = load_custom_price_data(path_or_file)
     return loaded.prices, loaded.names
 
@@ -844,22 +848,31 @@ with page_baseline:
 
 with page_custom:
     st.subheader("自定义 ERC")
-    if SAMPLE_CUSTOM_PATH.exists():
-        st.download_button(
-            "下载自定义 Wind 模板",
-            data=SAMPLE_CUSTOM_PATH.read_bytes(),
-            file_name=SAMPLE_CUSTOM_PATH.name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    st.caption("默认直接使用网页内置数据集；数据更新后会自动随站点发布，无需每次打开网页重新上传。")
+    uploaded_file = None
+    with st.expander("临时替换数据（可选）", expanded=False):
+        if SAMPLE_CUSTOM_PATH.exists():
+            st.download_button(
+                "下载当前自定义 Wind 模板",
+                data=SAMPLE_CUSTOM_PATH.read_bytes(),
+                file_name=SAMPLE_CUSTOM_PATH.name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        uploaded_file = st.file_uploader(
+            "上传其他 Wind 标准化收盘价 Excel（仅本次会话）",
+            type=["xlsx", "xls"],
         )
-    uploaded_file = st.file_uploader("上传 Wind 标准化收盘价 Excel", type=["xlsx", "xls"])
 
     try:
         if uploaded_file is not None:
             custom_prices, custom_names = cached_load_custom(uploaded_file)
             data_label = uploaded_file.name
         else:
-            custom_prices, custom_names = cached_load_custom(str(SAMPLE_CUSTOM_PATH))
-            data_label = str(SAMPLE_CUSTOM_PATH)
+            custom_prices, custom_names = cached_load_custom(
+                str(SAMPLE_CUSTOM_PATH),
+                SAMPLE_CUSTOM_PATH.stat().st_mtime_ns,
+            )
+            data_label = f"网页内置数据（更新至 {custom_prices.index.max():%Y-%m-%d}）"
     except Exception as exc:
         st.error(f"读取自定义资产数据失败：{exc}")
         st.stop()
@@ -873,13 +886,19 @@ with page_custom:
         or st.session_state.get("_sc_nested_has_result", False)
     )
 
-    def _coerce_saved_date(value, lower: pd.Timestamp, upper: pd.Timestamp) -> pd.Timestamp:
+    def _coerce_saved_date(
+        value,
+        lower: pd.Timestamp,
+        upper: pd.Timestamp,
+        fallback: pd.Timestamp | None = None,
+    ) -> pd.Timestamp:
+        fallback_date = lower if fallback is None else fallback
         try:
             ts = pd.Timestamp(value)
         except Exception:
-            return lower
+            return fallback_date
         if pd.isna(ts):
-            return lower
+            return fallback_date
         return min(max(ts, lower), upper)
 
     with st.expander("数据与可用资产池", expanded=not _has_custom_result):
@@ -895,6 +914,7 @@ with page_custom:
     _restore = st.session_state.pop("_sc_custom_restore", None)
     if _restore is not None:
         restored_mode = _restore.get("mode", "基础")
+        live_end_date = bool(_restore.get("auto_end_date", False))
         st.session_state.erc_mode = restored_mode
         if restored_mode == "基础":
             restored_codes = [c for c in _restore.get("selected_codes", []) if c in custom_prices.columns]
@@ -904,7 +924,8 @@ with page_custom:
             if len(restored_codes) >= 2:
                 common_start, common_end = available_window(custom_prices, restored_codes)
                 st.session_state.custom_start = _coerce_saved_date(_restore.get("custom_start"), common_start, common_end)
-                st.session_state.custom_end = _coerce_saved_date(_restore.get("custom_end"), common_start, common_end)
+                end_value = None if live_end_date else _restore.get("custom_end")
+                st.session_state.custom_end = _coerce_saved_date(end_value, common_start, common_end, fallback=common_end)
             st.session_state._sc_auto_run_basic = True
         else:
             restored_groups = []
@@ -926,7 +947,8 @@ with page_custom:
             if all_restored_codes:
                 common_start, common_end = available_window(custom_prices, all_restored_codes)
                 st.session_state.nested_start = _coerce_saved_date(_restore.get("custom_start"), common_start, common_end)
-                st.session_state.nested_end = _coerce_saved_date(_restore.get("custom_end"), common_start, common_end)
+                end_value = None if live_end_date else _restore.get("custom_end")
+                st.session_state.nested_end = _coerce_saved_date(end_value, common_start, common_end, fallback=common_end)
             st.session_state._sc_auto_run_nested = True
 
     # ── 已保存配置 ──
@@ -984,7 +1006,7 @@ with page_custom:
 
     def _date_text(cfg: dict) -> str:
         start = cfg.get("custom_start") or "-"
-        end = cfg.get("custom_end") or "-"
+        end = "最新可用日期" if cfg.get("auto_end_date") else (cfg.get("custom_end") or "-")
         return f"{start} 至 {end}"
 
     # Helper to build asset summary text
@@ -1059,6 +1081,7 @@ with page_custom:
             "benchmark_code": cfg.get("benchmark_code", ""),
             "custom_start": str(cfg.get("custom_start", "")),
             "custom_end": str(cfg.get("custom_end", "")),
+            "auto_end_date": bool(cfg.get("auto_end_date", False)),
         }
 
         available_codes = set(custom_prices.columns)
@@ -1102,11 +1125,40 @@ with page_custom:
 
         return normalized, warnings, errors
 
+    if not st.session_state.get("_sc_preset_configs_loaded", False):
+        preset_report: list[str] = []
+        try:
+            raw_presets = load_preset_configs(DEFAULT_CONFIG_PATH)
+        except Exception as exc:
+            raw_presets = []
+            preset_report.append(f"网页预置配置读取失败：{exc}")
+
+        normalized_presets: list[dict] = []
+        for raw_preset in raw_presets:
+            normalized, warnings, errors = _normalize_imported_config(raw_preset, normalized_presets)
+            source_name = raw_preset.get("name", "未命名")
+            if errors:
+                preset_report.append(f"跳过网页预置配置 {source_name}：" + "；".join(errors))
+                continue
+            normalized["auto_end_date"] = True
+            normalized["_preset"] = True
+            normalized_presets.append(normalized)
+            if warnings:
+                preset_report.append(f"网页预置配置 {source_name} 已调整：" + "；".join(warnings))
+
+        st.session_state.saved_custom_configs.extend(normalized_presets)
+        st.session_state._sc_preset_configs_loaded = True
+        st.session_state._sc_preset_report = preset_report
+
     if st.session_state.pop("_sc_import_success", None):
         st.success(st.session_state.pop("_sc_import_success_text", "配置导入成功。"))
     if st.session_state.get("_sc_import_report"):
         with st.expander("最近一次导入报告", expanded=False):
             for line in st.session_state["_sc_import_report"]:
+                st.write(line)
+    if st.session_state.get("_sc_preset_report"):
+        with st.expander("网页预置配置检查", expanded=False):
+            for line in st.session_state["_sc_preset_report"]:
                 st.write(line)
 
     if st.session_state.saved_custom_configs:
@@ -1129,7 +1181,9 @@ with page_custom:
                     status_badge = "可恢复" if _is_valid else "需处理"
                     st.markdown(f"`{_m}` `{status_badge}`")
                 with row1[2]:
-                    if st.button("×", key=f"sc_del_{i}", use_container_width=True):
+                    if cfg_dict.get("_preset"):
+                        st.caption("网页预置")
+                    elif st.button("×", key=f"sc_del_{i}", use_container_width=True):
                         st.session_state.saved_custom_configs.pop(i)
                         st.rerun()
 
@@ -1157,8 +1211,12 @@ with page_custom:
                 st.session_state._show_save_dialog = True
         with action_cols[1]:
             if st.session_state.saved_custom_configs:
+                export_configs = [
+                    {key: value for key, value in cfg.items() if not key.startswith("_")}
+                    for cfg in st.session_state.saved_custom_configs
+                ]
                 json_str = json.dumps(
-                    {"version": 1, "configs": st.session_state.saved_custom_configs},
+                    {"version": 1, "configs": export_configs},
                     ensure_ascii=False, indent=2,
                 )
                 st.download_button(

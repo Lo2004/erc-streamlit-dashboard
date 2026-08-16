@@ -5,5 +5,7 @@ __pycache__/
 .playwright-mcp/
 .streamlit/secrets.toml
 data/~$*.xlsx
+automation/logs/
+automation/*.lock
 参考代码/
 *.png
