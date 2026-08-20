@@ -352,7 +352,23 @@ try {
             throw "git diff failed with exit code $diffExitCode."
         }
 
-        Invoke-Git -ArgumentList @("pull", "--rebase", "--autostash", "origin", $branch) | Out-Null
+        $pulled = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Invoke-Git -ArgumentList @("pull", "--rebase", "--autostash", "origin", $branch) | Out-Null
+                $pulled = $true
+                break
+            }
+            catch {
+                if ($attempt -ge 3) { throw }
+                Write-Log "Pull attempt $attempt failed; retrying. $($_.Exception.Message)"
+                Start-Sleep -Seconds (20 * $attempt)
+            }
+        }
+
+        if (-not $pulled) {
+            throw "Failed to update the local branch before publishing."
+        }
 
         $published = $false
         for ($attempt = 1; $attempt -le 3; $attempt++) {
