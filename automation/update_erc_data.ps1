@@ -112,8 +112,28 @@ function Invoke-Git {
         [switch]$Quiet
     )
 
-    $output = & $script:gitExecutable -C $script:repositoryPathResolved @ArgumentList 2>&1
-    $exitCode = $LASTEXITCODE
+    # Windows PowerShell 5.1 turns native stderr into ErrorRecord objects and,
+    # with the script-wide Stop preference, can throw even when git exits 0
+    # (for example, `git pull` writes its normal "From ..." line to stderr).
+    $previousErrorActionPreference = $ErrorActionPreference
+    $hasNativePreference = $null -ne (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue)
+    if ($hasNativePreference) {
+        $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+    }
+    try {
+        $ErrorActionPreference = "Continue"
+        if ($hasNativePreference) {
+            $PSNativeCommandUseErrorActionPreference = $false
+        }
+        $output = & $script:gitExecutable -C $script:repositoryPathResolved @ArgumentList 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if ($hasNativePreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+        }
+    }
     if (-not $Quiet -and $output) {
         foreach ($line in $output) {
             Write-Log "git: $line"
