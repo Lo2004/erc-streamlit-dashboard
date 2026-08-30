@@ -20,7 +20,7 @@ from src.custom import (
     run_custom_backtest_with_benchmark,
     run_two_layer_erc,
 )
-from src.config_presets import DEFAULT_CONFIG_PATH, load_preset_configs
+from src.config_presets import DEFAULT_CONFIG_PATH, load_default_preset, load_preset_configs
 from src.data_loader import extract_rf_from_prices, load_wind_price_table
 from src.risk_control import run_final_indicator_overlay
 
@@ -649,6 +649,14 @@ with col_dl:
 # ═══════════════════════════════════════════════════════
 # 恢复已保存配置 — 必须在 sidebar widget 之前执行
 # ═══════════════════════════════════════════════════════
+if not st.session_state.get("_sc_default_config_initialized", False):
+    try:
+        st.session_state._sc_pending_restore = load_default_preset(DEFAULT_CONFIG_PATH)
+    except Exception as exc:
+        st.session_state._sc_default_config_error = str(exc)
+    finally:
+        st.session_state._sc_default_config_initialized = True
+
 if st.session_state.get("_sc_pending_restore"):
     _cfg = st.session_state.pop("_sc_pending_restore")
     st.session_state.lookback = int(_cfg.get("lookback", 60))
@@ -1082,6 +1090,7 @@ with page_custom:
             "custom_start": str(cfg.get("custom_start", "")),
             "custom_end": str(cfg.get("custom_end", "")),
             "auto_end_date": bool(cfg.get("auto_end_date", False)),
+            "default": bool(cfg.get("default", False)),
         }
 
         available_codes = set(custom_prices.columns)
@@ -1156,6 +1165,8 @@ with page_custom:
         with st.expander("最近一次导入报告", expanded=False):
             for line in st.session_state["_sc_import_report"]:
                 st.write(line)
+    if st.session_state.get("_sc_default_config_error"):
+        st.warning(f"默认配置自动载入失败：{st.session_state['_sc_default_config_error']}")
     if st.session_state.get("_sc_preset_report"):
         with st.expander("网页预置配置检查", expanded=False):
             for line in st.session_state["_sc_preset_report"]:
@@ -1182,7 +1193,8 @@ with page_custom:
                     st.markdown(f"`{_m}` `{status_badge}`")
                 with row1[2]:
                     if cfg_dict.get("_preset"):
-                        st.caption("网页预置")
+                        preset_label = "网页预置 · 默认" if cfg_dict.get("default") else "网页预置"
+                        st.caption(preset_label)
                     elif st.button("×", key=f"sc_del_{i}", use_container_width=True):
                         st.session_state.saved_custom_configs.pop(i)
                         st.rerun()

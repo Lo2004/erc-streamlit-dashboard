@@ -27,3 +27,14 @@ def load_preset_configs(path: str | Path = DEFAULT_CONFIG_PATH) -> list[dict]:
         config["auto_end_date"] = True
         config["_preset"] = True
     return presets
+
+def load_default_preset(path: str | Path = DEFAULT_CONFIG_PATH) -> dict:
+    """Return the configured default preset, falling back to the first preset."""
+    presets = load_preset_configs(path)
+    if not presets:
+        raise ValueError("ERC preset bundle is empty.")
+
+    defaults = [config for config in presets if config.get("default") is True]
+    if len(defaults) > 1:
+        raise ValueError("ERC preset bundle must contain at most one default config.")
+    return copy.deepcopy(defaults[0] if defaults else presets[0])

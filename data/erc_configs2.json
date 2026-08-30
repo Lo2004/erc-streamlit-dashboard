@@ -3,6 +3,7 @@
   "configs": [
     {
       "name": "自由现金流+成长100+长债+黄金+豆粕",
+      "default": true,
       "mode": "嵌套",
       "lookback": 60,
       "rebalance_label": "月度",
