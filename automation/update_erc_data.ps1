@@ -105,6 +105,44 @@ function Get-WindFormulaError {
     return ""
 }
 
+function Test-GitHasTrackedChanges {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Pathspec,
+        [switch]$Cached
+    )
+
+    $arguments = @("diff")
+    if ($Cached) {
+        $arguments += "--cached"
+    }
+    $arguments += @("--quiet", "--")
+    $arguments += $Pathspec
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $hasNativePreference = $null -ne (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue)
+    if ($hasNativePreference) {
+        $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+    }
+    try {
+        $ErrorActionPreference = "Continue"
+        if ($hasNativePreference) {
+            $PSNativeCommandUseErrorActionPreference = $false
+        }
+        & $script:gitExecutable -C $script:repositoryPathResolved @arguments 2>&1 | Out-Null
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if ($hasNativePreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+        }
+    }
+
+    if ($exitCode -eq 0) { return $false }
+    if ($exitCode -eq 1) { return $true }
+    throw "git $($arguments -join ' ') failed with exit code $exitCode."
+}
+
 function Invoke-Git {
     param(
         [Parameter(Mandatory = $true)][string[]]$ArgumentList,
@@ -190,15 +228,15 @@ try {
 
     if (-not $SkipGitPush) {
         $script:gitExecutable = (Get-Command git.exe -ErrorAction Stop).Source
-        $statusLines = Invoke-Git -ArgumentList @("-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=no") -Quiet
-        $unexpectedChanges = @(
-            $statusLines | Where-Object {
-                $line = [string]$_
-                $line -and -not $line.EndsWith($destinationRelativePath)
-            }
-        )
-        if ($unexpectedChanges.Count -gt 0) {
-            throw "Repository has unrelated tracked changes. Resolve them before the scheduled refresh: $($unexpectedChanges -join '; ')"
+        # Do not parse localized `git status` path text here. Windows PowerShell 5.1
+        # can mojibake UTF-8 Chinese filenames, causing the expected workbook
+        # change to be mistaken for an unrelated edit. Ask Git directly whether
+        # anything except the destination workbook differs.
+        $excludeDestination = ":(exclude)$destinationRelativePath"
+        $unexpectedWorkingChanges = Test-GitHasTrackedChanges -Pathspec @(".", $excludeDestination)
+        $unexpectedStagedChanges = Test-GitHasTrackedChanges -Cached -Pathspec @(".", $excludeDestination)
+        if ($unexpectedWorkingChanges -or $unexpectedStagedChanges) {
+            throw "Repository has unrelated tracked changes. Resolve them before the scheduled refresh."
         }
     }
 
