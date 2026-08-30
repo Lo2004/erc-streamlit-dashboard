@@ -729,7 +729,7 @@ with page_baseline:
     st.subheader("基准 ERC")
     update_box = st.expander("手动更新基准数据", expanded=False)
     with update_box:
-        st.write("下载当前 Wind 模板，在本地用安装 Wind 插件的 Excel 打开并刷新数据，再把刷新后的 Excel 上传回来。文件同时包含基准 ERC 资产和 CBA00621.CS 无风险利率数据。")
+        st.write("基准 ERC 数据已纳入每日 17:00 的 Wind 自动刷新。本区域用于临时覆盖或故障排查：下载当前 Wind 模板，在本地刷新后上传。文件同时包含基准 ERC 资产和 CBA00621.CS 无风险利率数据。")
         if DATA_PATH.exists():
             st.download_button(
                 "下载当前基准 Wind Excel",

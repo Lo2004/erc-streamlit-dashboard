@@ -1,7 +1,10 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$SourceWorkbook,
+    [string]$CustomSourceWorkbook,
+
+    [Parameter(Mandatory = $true)]
+    [string]$BaselineSourceWorkbook,
 
     [string]$RepositoryPath = (Split-Path -Parent $PSScriptRoot),
 
@@ -14,9 +17,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$sourcePath = (Resolve-Path -LiteralPath $SourceWorkbook).Path
+$customSourcePath = (Resolve-Path -LiteralPath $CustomSourceWorkbook).Path
+$baselineSourcePath = (Resolve-Path -LiteralPath $BaselineSourceWorkbook).Path
 $repositoryPathResolved = (Resolve-Path -LiteralPath $RepositoryPath).Path
-$refreshScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "update_erc_data.ps1")).Path
+$refreshScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "update_all_erc_data.ps1")).Path
 $powerShellExecutable = (Get-Command powershell.exe -ErrorAction Stop).Source
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $triggerTime = [DateTime]::Today.Add([TimeSpan]::ParseExact($At, "hh\:mm", $null))
@@ -27,7 +31,8 @@ $arguments = @(
     "-WindowStyle Hidden",
     "-ExecutionPolicy Bypass",
     "-File `"$refreshScript`"",
-    "-SourceWorkbook `"$sourcePath`"",
+    "-CustomSourceWorkbook `"$customSourcePath`"",
+    "-BaselineSourceWorkbook `"$baselineSourcePath`"",
     "-RepositoryPath `"$repositoryPathResolved`"",
     "-VisibleExcel"
 ) -join " "
@@ -42,7 +47,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
     -MultipleInstances IgnoreNew
-$task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Refresh the Wind-backed ERC workbook and publish it to Streamlit every day at $At."
+$task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Refresh the Wind-backed custom and baseline ERC workbooks and publish them to Streamlit every day at $At."
 
 if ($PSCmdlet.ShouldProcess($TaskName, "Register daily ERC refresh task for $At")) {
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
@@ -56,6 +61,7 @@ $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName
     User = $currentUser
     Schedule = "Daily $At"
     NextRunTime = $taskInfo.NextRunTime
-    SourceWorkbook = $sourcePath
+    CustomSourceWorkbook = $customSourcePath
+    BaselineSourceWorkbook = $baselineSourcePath
     RepositoryPath = $repositoryPathResolved
 }

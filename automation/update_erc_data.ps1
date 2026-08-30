@@ -14,6 +14,11 @@ param(
     [ValidateRange(2, 20)]
     [int]$StablePollCount = 4,
 
+    [ValidateRange(0, 200)]
+    [int]$ExpectedAssetCount = 0,
+
+    [string[]]$AdditionalPublishPaths = @(),
+
     [switch]$SkipGitPush,
 
     [switch]$VisibleExcel
@@ -29,6 +34,16 @@ $repositoryPathResolved = (Resolve-Path -LiteralPath $RepositoryPath).Path
 $destinationFileName = [IO.Path]::GetFileName($sourcePath)
 $destinationRelativePath = "data/$destinationFileName"
 $destinationPath = Join-Path $repositoryPathResolved ($destinationRelativePath -replace "/", "\")
+$normalizedAdditionalPublishPaths = @(
+    $AdditionalPublishPaths | ForEach-Object { ([string]$_).Trim().Replace("\", "/") } | Where-Object { $_ }
+)
+$publishPaths = @($destinationRelativePath) + $normalizedAdditionalPublishPaths
+$publishPaths = @($publishPaths | Select-Object -Unique)
+foreach ($publishPath in $publishPaths) {
+    if ([IO.Path]::IsPathRooted($publishPath) -or $publishPath -match "(^|/)\.\.(/|$)") {
+        throw "Publish path must be repository-relative and stay inside the repository: $publishPath"
+    }
+}
 $logDirectory = Join-Path $repositoryPathResolved "automation\logs"
 New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 $logPath = Join-Path $logDirectory ("erc-refresh-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
@@ -232,9 +247,9 @@ try {
         # can mojibake UTF-8 Chinese filenames, causing the expected workbook
         # change to be mistaken for an unrelated edit. Ask Git directly whether
         # anything except the destination workbook differs.
-        $excludeDestination = ":(exclude)$destinationRelativePath"
-        $unexpectedWorkingChanges = Test-GitHasTrackedChanges -Pathspec @(".", $excludeDestination)
-        $unexpectedStagedChanges = Test-GitHasTrackedChanges -Cached -Pathspec @(".", $excludeDestination)
+        $allowedPathspec = @(".") + @($publishPaths | ForEach-Object { ":(exclude)$_" })
+        $unexpectedWorkingChanges = Test-GitHasTrackedChanges -Pathspec $allowedPathspec
+        $unexpectedStagedChanges = Test-GitHasTrackedChanges -Cached -Pathspec $allowedPathspec
         if ($unexpectedWorkingChanges -or $unexpectedStagedChanges) {
             throw "Repository has unrelated tracked changes. Resolve them before the scheduled refresh."
         }
@@ -298,11 +313,17 @@ try {
             $null -ne $currentState.LastDate -and $currentState.LastDate -ge $initialState.LastDate
         )
         $windFormulaError = Get-WindFormulaError -Worksheet $worksheet
+        $assetCountValid = if ($ExpectedAssetCount -gt 0) {
+            $currentState.PopulatedValues -eq $ExpectedAssetCount
+        }
+        else {
+            $currentState.PopulatedValues -ge 5
+        }
         $dataLooksValid = (
             $null -ne $currentState.LastDate -and
             $dataAge -le $MaxDataAgeDays -and
             $dateDidNotRegress -and
-            $currentState.PopulatedValues -ge 5 -and
+            $assetCountValid -and
             [string]::IsNullOrWhiteSpace($windFormulaError)
         )
 
@@ -375,15 +396,15 @@ try {
             Invoke-Git -ArgumentList @("config", "user.email", "erc-dashboard-updater@users.noreply.github.com") | Out-Null
         }
 
-        Invoke-Git -ArgumentList @("add", "--", $destinationRelativePath) | Out-Null
-        & $gitExecutable -C $repositoryPathResolved diff --cached --quiet -- $destinationRelativePath
+        Invoke-Git -ArgumentList (@("add", "--") + $publishPaths) | Out-Null
+        & $gitExecutable -C $repositoryPathResolved diff --cached --quiet -- @publishPaths
         $diffExitCode = $LASTEXITCODE
         if ($diffExitCode -eq 0) {
             Write-Log "No workbook changes to publish."
         }
         elseif ($diffExitCode -eq 1) {
             $commitMessage = "Update ERC data through $($finalState.LastDate.ToString('yyyy-MM-dd'))"
-            Invoke-Git -ArgumentList @("commit", "-m", $commitMessage, "--", $destinationRelativePath) | Out-Null
+            Invoke-Git -ArgumentList (@("commit", "-m", $commitMessage, "--") + $publishPaths) | Out-Null
             Write-Log "Created data update commit."
         }
         else {

@@ -87,7 +87,7 @@ $$r_{\text{对冲后},t} = r_{\text{黄金行业},t} - \hat{\beta}_{\text{权益
 
 保留现货金暴露不做对冲。回归系数可在"数据"页签查看。
 
-**数据更新**：展开"手动更新基准数据"框，下载当前 Wind Excel → 在本地用 Wind 插件刷新 → 再上传回来。文件必须同时包含基准 ERC 资产、沪深300、上海金，以及 `CBA00621.CS` 无风险利率列。
+**数据更新**：基准数据已纳入每日 17:00 的 Wind 自动刷新与发布链路；“手动更新基准数据”仍保留为临时覆盖和故障排查入口。文件必须同时包含基准 ERC 资产、沪深300、上海金，以及 `CBA00621.CS` 无风险利率列。
 
 ### 2. 自定义 ERC Tab
 
@@ -234,14 +234,16 @@ H20955.CSI  CBA00661.CS  CI005213.WI  H00300.CSI  AU9999.SGE  CBA00621.CS
 
 仓库提供 Windows 自动更新脚本：
 
-- `automation/update_erc_data.ps1`：通过本机 Excel 打开 Wind 工作簿，等待公式刷新稳定，校验最新数据日期，保存并复制到 `data/自定义ERC-默认数据集.xlsx`，随后提交并推送到当前分支
+- `automation/update_erc_data.ps1`：刷新并校验单个 Wind 工作簿，可指定最新一行应有的资产数
+- `automation/update_all_erc_data.ps1`：依次刷新自定义 ERC（29 项资产）和基准 ERC（6 项资产，含无风险利率），全部成功后一次性提交并推送两个数据文件
 - `automation/install_daily_task.ps1`：注册每天 17:00 运行的 Windows 计划任务；任务使用当前登录用户的交互会话，以便加载 Wind Excel 插件
 
 首次安装（在 PowerShell 中运行）：
 
 ```powershell
 .\automation\install_daily_task.ps1 `
-  -SourceWorkbook "D:\全天候组合\自定义ERC-默认数据集.xlsx" `
+  -CustomSourceWorkbook "D:\全天候组合\自定义ERC-默认数据集.xlsx" `
+  -BaselineSourceWorkbook "D:\全天候组合\标准 ERC- 收盘价数据.xlsx" `
   -RepositoryPath "D:\全天候组合\erc-streamlit-dashboard" `
   -At "17:00"
 ```
@@ -249,13 +251,14 @@ H20955.CSI  CBA00661.CS  CI005213.WI  H00300.CSI  AU9999.SGE  CBA00621.CS
 手动试运行但不推送：
 
 ```powershell
-.\automation\update_erc_data.ps1 `
-  -SourceWorkbook "D:\全天候组合\自定义ERC-默认数据集.xlsx" `
+.\automation\update_all_erc_data.ps1 `
+  -CustomSourceWorkbook "D:\全天候组合\自定义ERC-默认数据集.xlsx" `
+  -BaselineSourceWorkbook "D:\全天候组合\标准 ERC- 收盘价数据.xlsx" `
   -RepositoryPath "D:\全天候组合\erc-streamlit-dashboard" `
   -SkipGitPush
 ```
 
-运行条件：Windows 已登录、Wind 终端与 Excel 插件可用、Git 凭据可推送本仓库、电脑在计划时间开机或稍后恢复。脚本只有在 Wind 公式无报错、数据日期合理且结果稳定后才覆盖并发布线上文件；失败时保留上一版数据。日志写入 `automation/logs/`（已忽略，不提交）。推送后 Streamlit Community Cloud 会按仓库新提交自动重新部署。
+运行条件：Windows 已登录、Wind 终端与 Excel 插件可用、Git 凭据可推送本仓库、电脑在计划时间开机或稍后恢复。只有两个工作簿都通过 Wind 公式、日期、资产数量和稳定性检查后，脚本才会发布；任一失败均不会推送半套数据。日志写入 `automation/logs/`（已忽略，不提交）。推送后 Streamlit Community Cloud 会按仓库新提交自动重新部署。
 
 ### 更换交易日历
 
