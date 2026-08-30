@@ -38,7 +38,7 @@ $arguments = @(
 ) -join " "
 
 $action = New-ScheduledTaskAction -Execute $powerShellExecutable -Argument $arguments -WorkingDirectory $repositoryPathResolved
-$trigger = New-ScheduledTaskTrigger -Daily -At $triggerTime
+$trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At $triggerTime
 $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
@@ -47,7 +47,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
     -MultipleInstances IgnoreNew
-$task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Refresh the Wind-backed custom and baseline ERC workbooks and publish them to Streamlit every day at $At."
+$task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Refresh custom and baseline ERC data at $At on configured A-share trading days."
 
 if ($PSCmdlet.ShouldProcess($TaskName, "Register daily ERC refresh task for $At")) {
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
@@ -59,7 +59,7 @@ $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName
     TaskName = $registeredTask.TaskName
     State = $registeredTask.State
     User = $currentUser
-    Schedule = "Daily $At"
+    Schedule = "A-share trading days at $At (weekday trigger plus calendar gate)"
     NextRunTime = $taskInfo.NextRunTime
     CustomSourceWorkbook = $customSourcePath
     BaselineSourceWorkbook = $baselineSourcePath

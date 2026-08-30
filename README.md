@@ -235,8 +235,8 @@ H20955.CSI  CBA00661.CS  CI005213.WI  H00300.CSI  AU9999.SGE  CBA00621.CS
 仓库提供 Windows 自动更新脚本：
 
 - `automation/update_erc_data.ps1`：刷新并校验单个 Wind 工作簿，可指定最新一行应有的资产数
-- `automation/update_all_erc_data.ps1`：依次刷新自定义 ERC（29 项资产）和基准 ERC（6 项资产，含无风险利率），全部成功后一次性提交并推送两个数据文件
-- `automation/install_daily_task.ps1`：注册每天 17:00 运行的 Windows 计划任务；任务使用当前登录用户的交互会话，以便加载 Wind Excel 插件
+- `automation/update_all_erc_data.ps1`：先核对 `A股交易日历_2026-2028.xlsx`，仅在交易日依次刷新自定义 ERC（29 项资产）和基准 ERC（6 项资产，含无风险利率），全部成功后一次性提交并推送两个数据文件
+- `automation/install_daily_task.ps1`：注册周一至周五 17:00 的 Windows 计划任务，并由交易日历过滤法定休市日；任务使用当前登录用户的交互会话，以便加载 Wind Excel 插件
 
 首次安装（在 PowerShell 中运行）：
 
@@ -258,7 +258,7 @@ H20955.CSI  CBA00661.CS  CI005213.WI  H00300.CSI  AU9999.SGE  CBA00621.CS
   -SkipGitPush
 ```
 
-运行条件：Windows 已登录、Wind 终端与 Excel 插件可用、Git 凭据可推送本仓库、电脑在计划时间开机或稍后恢复。只有两个工作簿都通过 Wind 公式、日期、资产数量和稳定性检查后，脚本才会发布；任一失败均不会推送半套数据。日志写入 `automation/logs/`（已忽略，不提交）。推送后 Streamlit Community Cloud 会按仓库新提交自动重新部署。
+运行条件：Windows 已登录、Wind 终端与 Excel 插件可用、Git 凭据可推送本仓库、电脑在计划时间开机或稍后恢复。计划任务仅在周一至周五触发，脚本再以 A 股交易日历过滤节假日。只有两个工作簿都通过 Wind 公式、日期、资产数量和稳定性检查后，脚本才会发布；任一失败均不会推送半套数据。日志写入 `automation/logs/`（已忽略，不提交）。推送后 Streamlit Community Cloud 会按仓库新提交自动重新部署。
 
 ### 更换交易日历
 
