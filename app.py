@@ -364,7 +364,18 @@ def render_weight_strip(weights: pd.Series, weight_change: pd.Series | None, lab
 
 
 @st.cache_data(show_spinner=False)
-def cached_compute_baseline(path: str, start_date: str, lookback: int, rebalance: str, rebalance_day: int, cost_bps: float):
+def cached_compute_baseline(
+    path: str,
+    start_date: str,
+    lookback: int,
+    rebalance: str,
+    rebalance_day: int,
+    cost_bps: float,
+    version_token: int | None = None,
+):
+    # Include the workbook timestamp in Streamlit's cache key so scheduled
+    # replacements become visible without requiring a process restart.
+    del version_token
     return compute_baseline(path, start_date, lookback, rebalance, rebalance_day, cost_bps=cost_bps)
 
 
@@ -375,9 +386,18 @@ def cached_compute_baseline_upload(uploaded_file, start_date: str, lookback: int
 
 
 @st.cache_data(show_spinner=False)
-def _cached_rf() -> tuple[pd.Series, pd.Series, str]:
+def _cached_rf_versioned(version_token: int | None = None) -> tuple[pd.Series, pd.Series, str]:
+    del version_token
     loaded = load_wind_price_table(str(DATA_PATH))
     return extract_rf_from_prices(loaded.prices, loaded.names)
+
+
+def _baseline_data_version() -> int | None:
+    return DATA_PATH.stat().st_mtime_ns if DATA_PATH.exists() else None
+
+
+def _cached_rf() -> tuple[pd.Series, pd.Series, str]:
+    return _cached_rf_versioned(_baseline_data_version())
 
 
 def _cached_rf_nav() -> pd.Series:
@@ -752,7 +772,15 @@ with page_baseline:
             data = cached_compute_baseline_upload(baseline_upload, str(start_date), int(lookback), rebalance, int(rebalance_day), cost_bps_f)
             baseline_source_label = baseline_upload.name
         elif DATA_PATH.exists():
-            data = cached_compute_baseline(str(DATA_PATH), str(start_date), int(lookback), rebalance, int(rebalance_day), cost_bps_f)
+            data = cached_compute_baseline(
+                str(DATA_PATH),
+                str(start_date),
+                int(lookback),
+                rebalance,
+                int(rebalance_day),
+                cost_bps_f,
+                _baseline_data_version(),
+            )
             baseline_source_label = str(DATA_PATH)
         else:
             raise FileNotFoundError(f"找不到数据文件：{DATA_PATH}")
