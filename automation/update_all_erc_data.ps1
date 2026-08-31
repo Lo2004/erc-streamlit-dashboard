@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$CustomSourceWorkbook,
@@ -30,14 +30,16 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repositoryPathResolved = (Resolve-Path -LiteralPath $RepositoryPath).Path
-if ([string]::IsNullOrWhiteSpace($TradingCalendarWorkbook)) {
-    $TradingCalendarWorkbook = Join-Path $repositoryPathResolved "data\A股交易日历_2026-2028.xlsx"
+$wrapperLogDirectory = Join-Path $repositoryPathResolved "automation\logs"
+New-Item -ItemType Directory -Force -Path $wrapperLogDirectory | Out-Null
+$wrapperLogPath = Join-Path $wrapperLogDirectory ("erc-all-refresh-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
+
+function Write-WrapperLog {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
+    Write-Host $line
+    Add-Content -LiteralPath $wrapperLogPath -Value $line -Encoding utf8
 }
-$tradingCalendarPath = (Resolve-Path -LiteralPath $TradingCalendarWorkbook).Path
-$customSourcePath = (Resolve-Path -LiteralPath $CustomSourceWorkbook).Path
-$baselineSourcePath = (Resolve-Path -LiteralPath $BaselineSourceWorkbook).Path
-$singleUpdater = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "update_erc_data.ps1")).Path
-$customRelativePath = "data/$([IO.Path]::GetFileName($customSourcePath))"
 
 function Test-IsConfiguredTradingDay {
     param(
@@ -77,35 +79,53 @@ function Test-IsConfiguredTradingDay {
     }
 }
 
-$today = (Get-Date).Date
-if (-not $ForceRun -and -not (Test-IsConfiguredTradingDay -CalendarPath $tradingCalendarPath -Date $today)) {
-    Write-Host "$($today.ToString('yyyy-MM-dd')) is not in the configured A-share trading calendar; no ERC refresh is required."
-    exit 0
-}
+try {
+    Write-WrapperLog "Starting combined ERC refresh."
+    if ([string]::IsNullOrWhiteSpace($TradingCalendarWorkbook)) {
+        $TradingCalendarWorkbook = Join-Path $repositoryPathResolved "data\A股交易日历_2026-2028.xlsx"
+    }
+    $tradingCalendarPath = (Resolve-Path -LiteralPath $TradingCalendarWorkbook).Path
+    $customSourcePath = (Resolve-Path -LiteralPath $CustomSourceWorkbook).Path
+    $baselineSourcePath = (Resolve-Path -LiteralPath $BaselineSourceWorkbook).Path
+    $singleUpdater = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "update_erc_data.ps1")).Path
+    $customRelativePath = "data/$([IO.Path]::GetFileName($customSourcePath))"
 
-$commonArguments = @{
-    RepositoryPath = $repositoryPathResolved
-    TimeoutMinutes = $TimeoutMinutes
-    MaxDataAgeDays = $MaxDataAgeDays
-    StablePollCount = $StablePollCount
-}
-if ($VisibleExcel) {
-    $commonArguments.VisibleExcel = $true
-}
+    $today = (Get-Date).Date
+    if (-not $ForceRun -and -not (Test-IsConfiguredTradingDay -CalendarPath $tradingCalendarPath -Date $today)) {
+        Write-WrapperLog "$($today.ToString('yyyy-MM-dd')) is not in the configured A-share trading calendar; no ERC refresh is required."
+        exit 0
+    }
+    Write-WrapperLog "$($today.ToString('yyyy-MM-dd')) is a configured A-share trading day."
 
-Write-Host "Refreshing custom ERC workbook first."
-& $singleUpdater @commonArguments `
-    -SourceWorkbook $customSourcePath `
-    -ExpectedAssetCount 29 `
-    -SkipGitPush
+    $commonArguments = @{
+        RepositoryPath = $repositoryPathResolved
+        TimeoutMinutes = $TimeoutMinutes
+        MaxDataAgeDays = $MaxDataAgeDays
+        StablePollCount = $StablePollCount
+    }
+    if ($VisibleExcel) {
+        $commonArguments.VisibleExcel = $true
+    }
 
-Write-Host "Refreshing baseline ERC workbook, then publishing both datasets."
-$baselineArguments = @{
-    SourceWorkbook = $baselineSourcePath
-    ExpectedAssetCount = 6
-    AdditionalPublishPaths = @($customRelativePath)
+    Write-WrapperLog "Refreshing custom ERC workbook first."
+    & $singleUpdater @commonArguments `
+        -SourceWorkbook $customSourcePath `
+        -ExpectedAssetCount 29 `
+        -SkipGitPush
+
+    Write-WrapperLog "Refreshing baseline ERC workbook, then publishing both datasets."
+    $baselineArguments = @{
+        SourceWorkbook = $baselineSourcePath
+        ExpectedAssetCount = 6
+        AdditionalPublishPaths = @($customRelativePath)
+    }
+    if ($SkipGitPush) {
+        $baselineArguments.SkipGitPush = $true
+    }
+    & $singleUpdater @commonArguments @baselineArguments
+    Write-WrapperLog "Combined ERC refresh completed successfully."
 }
-if ($SkipGitPush) {
-    $baselineArguments.SkipGitPush = $true
+catch {
+    try { Write-WrapperLog "ERROR: $($_.Exception.Message)" } catch {}
+    throw
 }
-& $singleUpdater @commonArguments @baselineArguments
