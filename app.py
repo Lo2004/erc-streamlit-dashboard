@@ -681,8 +681,8 @@ if st.session_state.get("_sc_pending_restore"):
     _cfg = st.session_state.pop("_sc_pending_restore")
     st.session_state.lookback = int(_cfg.get("lookback", 60))
     st.session_state.rebalance_label = _cfg.get("rebalance_label", "月度")
-    st.session_state.rebalance_day = int(_cfg.get("rebalance_day", 1))
-    st.session_state.cost_bps = int(_cfg.get("cost_bps", 0))
+    st.session_state.rebalance_day = int(_cfg.get("rebalance_day", 12))
+    st.session_state.cost_bps = int(_cfg.get("cost_bps", 50))
     st.session_state.erc_mode = _cfg.get("mode", "基础")
     st.session_state._sc_custom_restore = _cfg
 
@@ -700,17 +700,19 @@ with st.sidebar:
     else:
         period_label = "每月" if rebalance == "M" else "每周"
         max_day = 23 if rebalance == "M" else 5
+        if st.session_state.get("rebalance_day", 1) > max_day:
+            st.session_state.rebalance_day = max_day
         rebalance_day = st.number_input(
             f"{period_label}第几个交易日调仓",
             min_value=1,
             max_value=max_day,
-            value=1,
+            value=12 if rebalance == "M" else 1,
             step=1,
             key="rebalance_day",
         )
         st.caption(f"{period_label}第 {rebalance_day} 个交易日计算新权重，次一交易日生效；若当期交易日不足，则使用当期最后一个交易日。")
 
-    cost_bps = st.number_input("双边交易成本（bps）", min_value=0, max_value=500, value=0, step=1, key="cost_bps")
+    cost_bps = st.number_input("双边交易成本（bps）", min_value=0, max_value=500, value=50, step=1, key="cost_bps")
 
     with st.expander("尾部风险参数", expanded=False):
         risk_defaults = {
@@ -1112,8 +1114,8 @@ with page_custom:
             "mode": mode,
             "lookback": int(cfg.get("lookback", 60) or 60),
             "rebalance_label": cfg.get("rebalance_label", "月度"),
-            "rebalance_day": int(cfg.get("rebalance_day", 1) or 1),
-            "cost_bps": int(cfg.get("cost_bps", 0) or 0),
+            "rebalance_day": int(cfg.get("rebalance_day", 12) or 12),
+            "cost_bps": int(cfg.get("cost_bps", 50) or 0),
             "benchmark_code": cfg.get("benchmark_code", ""),
             "custom_start": str(cfg.get("custom_start", "")),
             "custom_end": str(cfg.get("custom_end", "")),

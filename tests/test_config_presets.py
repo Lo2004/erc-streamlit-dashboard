@@ -47,8 +47,10 @@ class ConfigPresetTests(unittest.TestCase):
         self.assertEqual(config["benchmark_code"], "H00300.CSI")
         self.assertEqual(
             [asset for group in config["nested_groups"] for asset in group["assets"]],
-            ["480092.CNI", "480080.CNI", "CBA21801.CS", "AU9999.SGE", "159985.SZ"],
+            ["480092.CNI", "480080.CNI", "CBA21801.CS", "518880.OF", "159985.SZ"],
         )
+        self.assertEqual(config["rebalance_day"], 12)
+        self.assertEqual(config["cost_bps"], 50)
         self.assertTrue(config["auto_end_date"])
         self.assertTrue(config["_preset"])
 
